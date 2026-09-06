@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta name="theme-color" content="#06040a">
+
+    <title>NEXA — Acesso</title>
+
+    <link rel="stylesheet" href="login.css">
+</head>
+
+<body>
+
+    <div class="background-glow glow-one"></div>
+    <div class="background-glow glow-two"></div>
+
+    <main class="login-container">
+
+        <section class="login-card">
+
+            <div class="brand">
+                <div class="logo">
+                    N
+                </div>
+
+                <div>
+                    <h1>NEXA</h1>
+                    <p>Sistema de Gestão</p>
+                </div>
+            </div>
+
+
+            <div class="welcome">
+
+                <h2>Quem está entrando?</h2>
+
+                <p>
+                    Selecione seu perfil para continuar.
+                </p>
+
+            </div>
+
+
+            <!-- PERFIS -->
+
+            <div class="profiles">
+
+                <!-- ADMIN -->
+
+                <button
+                    class="profile-card"
+                    data-user="admin"
+                    type="button"
+                >
+
+                    <div class="profile-avatar admin-avatar">
+                        A
+                    </div>
+
+                    <div class="profile-info">
+                        <strong>Administrador</strong>
+                        <span>Acesso completo</span>
+                    </div>
+
+                    <div class="profile-arrow">
+                        →
+                    </div>
+
+                </button>
+
+
+                <!-- ARTHUR -->
+
+                <button
+                    class="profile-card"
+                    data-user="arthur"
+                    type="button"
+                >
+
+                    <div class="profile-avatar">
+                        AR
+                    </div>
+
+                    <div class="profile-info">
+                        <strong>Arthur Rodrigues</strong>
+                        <span>Funcionário</span>
+                    </div>
+
+                    <div class="profile-arrow">
+                        →
+                    </div>
+
+                </button>
+
+
+                <!-- PIETRO -->
+
+                <button
+                    class="profile-card"
+                    data-user="pietro"
+                    type="button"
+                >
+
+                    <div class="profile-avatar">
+                        PJ
+                    </div>
+
+                    <div class="profile-info">
+                        <strong>Pietro de Jesus</strong>
+                        <span>Funcionário</span>
+                    </div>
+
+                    <div class="profile-arrow">
+                        →
+                    </div>
+
+                </button>
+
+            </div>
+
+
+            <!-- SENHA -->
+
+            <div
+                class="password-area"
+                id="passwordArea"
+            >
+
+                <div class="selected-profile">
+
+                    <button
+                        type="button"
+                        id="backButton"
+                        class="back-button"
+                    >
+                        ←
+                    </button>
+
+                    <div
+                        class="selected-avatar"
+                        id="selectedAvatar"
+                    >
+                        A
+                    </div>
+
+                    <div>
+
+                        <strong id="selectedName">
+                            Administrador
+                        </strong>
+
+                        <span id="selectedRole">
+                            Acesso completo
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <form id="loginForm">
+
+                    <label for="password">
+                        Senha
+                    </label>
+
+                    <div class="password-input">
+
+                        <input
+                            type="password"
+                            id="password"
+                            placeholder="Digite sua senha"
+                            autocomplete="current-password"
+                            required
+                        >
+
+                        <button
+                            type="button"
+                            id="togglePassword"
+                            class="toggle-password"
+                            aria-label="Mostrar senha"
+                        >
+                            ◉
+                        </button>
+
+                    </div>
+
+
+                    <button
+                        type="submit"
+                        class="login-button"
+                    >
+
+                        <span>Entrar no painel</span>
+
+                        <span>→</span>
+
+                    </button>
+
+                </form>
+
+
+                <p
+                    id="loginMessage"
+                    class="login-message"
+                ></p>
+
+            </div>
+
+
+            <footer>
+                <span>●</span>
+                Sistema NEXA
+            </footer>
+
+        </section>
+
+    </main>
+
+
+    <script src="login.js"></script>
+
+</body>
+
+</html>

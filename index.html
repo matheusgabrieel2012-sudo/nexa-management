@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>NEXA Management</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="app-shell">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+
+        <div class="brand">
+            <div class="brand-mark">N</div>
+
+            <div>
+                <strong>NEXA</strong>
+                <span>MANAGEMENT</span>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <small>MENU PRINCIPAL</small>
+
+            <button class="nav-item active" data-page="dashboard">
+                <span class="nav-icon">⌂</span>
+                <span>Dashboard</span>
+            </button>
+
+            <button class="nav-item" data-page="sales">
+                <span class="nav-icon">◆</span>
+                <span>Vendas</span>
+            </button>
+
+            <button class="nav-item" data-page="clients">
+                <span class="nav-icon">◉</span>
+                <span>Clientes</span>
+            </button>
+
+            <button class="nav-item" data-page="tasks">
+                <span class="nav-icon">✓</span>
+                <span>Tarefas</span>
+            </button>
+
+            <button class="nav-item" data-page="goals">
+                <span class="nav-icon">◎</span>
+                <span>Metas</span>
+            </button>
+        </div>
+
+        <div class="sidebar-section">
+            <small>GESTÃO</small>
+
+            <button class="nav-item admin-only" data-page="team">
+                <span class="nav-icon">♙</span>
+                <span>Equipe</span>
+            </button>
+
+            <button class="nav-item admin-only" data-page="reports">
+                <span class="nav-icon">▥</span>
+                <span>Relatórios</span>
+            </button>
+
+            <button class="nav-item admin-only" data-page="settings">
+                <span class="nav-icon">⚙</span>
+                <span>Configurações</span>
+            </button>
+        </div>
+
+        <div class="sidebar-bottom">
+
+            <div class="sidebar-status">
+                <span></span>
+                Sistema operacional
+            </div>
+
+            <button class="logout-button" data-action="logout">
+                ↪ Sair
+            </button>
+
+        </div>
+
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+
+        <!-- TOPBAR -->
+        <header class="topbar">
+
+            <button class="mobile-menu" id="mobileMenu">
+                ☰
+            </button>
+
+            <div class="breadcrumb">
+                <span>NEXA</span>
+                <b>/</b>
+                <strong id="pageTitle">Dashboard</strong>
+            </div>
+
+            <div class="topbar-right">
+
+                <button class="notification-button" id="notificationButton">
+                    ◇
+                    <span id="notificationCount">0</span>
+                </button>
+
+                <div class="user-profile">
+
+                    <div class="user-avatar" id="topAvatar">
+                        A
+                    </div>
+
+                    <div class="user-info">
+                        <strong id="topUserName">Administrador</strong>
+                        <span id="topUserRole">Administrador</span>
+                    </div>
+
+                    <span class="user-arrow">⌄</span>
+
+                </div>
+
+            </div>
+
+        </header>
+
+        <!-- CONTENT -->
+        <div class="content">
+
+            <!-- ================= DASHBOARD ================= -->
+
+            <section class="page active" id="page-dashboard">
+
+                <div class="hero-dashboard">
+
+                    <div>
+                        <span class="eyebrow">CENTRAL DE OPERAÇÕES</span>
+
+                        <h1>
+                            Olá, <span id="welcomeName">Administrador</span>.
+                        </h1>
+
+                        <p>
+                            Aqui está o panorama da sua operação hoje.
+                        </p>
+                    </div>
+
+                    <div class="hero-date">
+                        <span id="currentDate"></span>
+                    </div>
+
+                </div>
+
+                <!-- KPIs -->
+
+                <div class="stats-grid">
+
+                    <article class="stat-card purple">
+
+                        <div class="stat-top">
+                            <span>Faturamento</span>
+                            <div class="stat-icon">R$</div>
+                        </div>
+
+                        <strong id="dashboardRevenue">R$ 0,00</strong>
+
+                        <small id="dashboardRevenueInfo">
+                            Nenhuma venda registrada
+                        </small>
+
+                    </article>
+
+                    <article class="stat-card green">
+
+                        <div class="stat-top">
+                            <span>Vendas</span>
+                            <div class="stat-icon">◆</div>
+                        </div>
+
+                        <strong id="dashboardSales">0</strong>
+
+                        <small id="dashboardSalesInfo">
+                            Nenhuma venda registrada
+                        </small>
+
+                    </article>
+
+                    <article class="stat-card blue">
+
+                        <div class="stat-top">
+                            <span>Clientes</span>
+                            <div class="stat-icon">◉</div>
+                        </div>
+
+                        <strong id="dashboardClients">0</strong>
+
+                        <small>
+                            Clientes cadastrados
+                        </small>
+
+                    </article>
+
+                    <article class="stat-card orange">
+
+                        <div class="stat-top">
+                            <span>Tarefas</span>
+                            <div class="stat-icon">✓</div>
+                        </div>
+
+                        <strong id="dashboardTasks">0</strong>
+
+                        <small id="dashboardTasksInfo">
+                            0 concluídas
+                        </small>
+
+                    </article>
+
+                </div>
+
+                <!-- DASHBOARD GRID -->
+
+                <div class="dashboard-grid">
+
+                    <article class="panel revenue-panel">
+
+                        <div class="panel-header">
+
+                            <div>
+                                <span class="eyebrow">PERFORMANCE</span>
+                                <h2>Resumo de vendas</h2>
+                            </div>
+
+                            <button class="ghost-button" data-page="sales">
+                                Ver vendas →
+                            </button>
+
+                        </div>
+
+                        <div class="revenue-main">
+
+                            <div>
+                                <span>Faturamento total</span>
+                                <strong id="dashboardRevenueLarge">
+                                    R$ 0,00
+                                </strong>
+                            </div>
+
+                            <div class="revenue-progress">
+
+                                <div class="progress-header">
+                                    <span>Meta geral</span>
+                                    <strong id="dashboardGoalPercent">0%</strong>
+                                </div>
+
+                                <div class="progress-bar">
+                                    <span id="dashboardGoalBar"></span>
+                                </div>
+
+                                <small id="dashboardGoalText">
+                                    Nenhuma meta definida
+                                </small>
+
+                            </div>
+
+                        </div>
+
+                    </article>
+
+                    <article class="panel quick-panel">
+
+                        <div class="panel-header">
+                            <div>
+                                <span class="eyebrow">ATALHOS</span>
+                                <h2>Ações rápidas</h2>
+                            </div>
+                        </div>
+
+                        <div class="quick-actions">
+
+                            <button data-action="new-sale">
+                                <span>◆</span>
+                                <strong>Registrar venda</strong>
+                                <small>Adicionar nova venda</small>
+                            </button>
+
+                            <button data-action="new-client">
+                                <span>◉</span>
+                                <strong>Novo cliente</strong>
+                                <small>Cadastrar cliente</small>
+                            </button>
+
+                            <button data-action="new-task">
+                                <span>✓</span>
+                                <strong>Nova tarefa</strong>
+                                <small>Criar atividade</small>
+                            </button>
+
+                        </div>
+
+                    </article>
+
+                </div>
+
+                <div class="dashboard-grid lower">
+
+                    <article class="panel">
+
+                        <div class="panel-header">
+
+                            <div>
+                                <span class="eyebrow">RECENTES</span>
+                                <h2>Últimas vendas</h2>
+                            </div>
+
+                            <button class="text-button" data-page="sales">
+                                Ver todas
+                            </button>
+
+                        </div>
+
+                        <div id="dashboardSalesList" class="sales-mini-list"></div>
+
+                    </article>
+
+                    <article class="panel">
+
+                        <div class="panel-header">
+
+                            <div>
+                                <span class="eyebrow">PRODUTIVIDADE</span>
+                                <h2>Ranking da equipe</h2>
+                            </div>
+
+                        </div>
+
+                        <div id="rankingList" class="ranking-list"></div>
+
+                    </article>
+
+                </div>
+
+                <div class="dashboard-grid lower">
+
+                    <article class="panel">
+
+                        <div class="panel-header">
+                            <div>
+                                <span class="eyebrow">ATIVIDADE</span>
+                                <h2>Atividade recente</h2>
+                            </div>
+                        </div>
+
+                        <div id="activityList" class="activity-list"></div>
+
+                    </article>
+
+                    <article class="panel priority-panel">
+
+                        <div class="panel-header">
+                            <div>
+                                <span class="eyebrow">ATENÇÃO</span>
+                                <h2>Tarefas prioritárias</h2>
+                            </div>
+                        </div>
+
+                        <div id="priorityTasks" class="priority-list"></div>
+
+                    </article>
+
+                </div>
+
+            </section>
+
+
+            <!-- ================= VENDAS ================= -->
+
+            <section class="page" id="page-sales">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">COMERCIAL</span>
+                        <h1>Vendas</h1>
+                        <p>Controle seu faturamento e sua operação comercial.</p>
+                    </div>
+
+                    <button class="primary-button admin-only" data-action="new-sale">
+                        + Registrar venda
+                    </button>
+
+                </div>
+
+                <div class="stats-grid compact">
+
+                    <article class="stat-card purple">
+                        <div class="stat-top">
+                            <span>Faturamento</span>
+                            <div class="stat-icon">R$</div>
+                        </div>
+                        <strong id="salesRevenue">R$ 0,00</strong>
+                        <small>Total registrado</small>
+                    </article>
+
+                    <article class="stat-card green">
+                        <div class="stat-top">
+                            <span>Vendas</span>
+                            <div class="stat-icon">◆</div>
+                        </div>
+                        <strong id="salesCount">0</strong>
+                        <small>Vendas registradas</small>
+                    </article>
+
+                    <article class="stat-card blue">
+                        <div class="stat-top">
+                            <span>Recebidas</span>
+                            <div class="stat-icon">✓</div>
+                        </div>
+                        <strong id="salesReceived">0</strong>
+                        <small>Vendas recebidas</small>
+                    </article>
+
+                    <article class="stat-card orange">
+                        <div class="stat-top">
+                            <span>Ticket médio</span>
+                            <div class="stat-icon">↗</div>
+                        </div>
+                        <strong id="salesAverage">R$ 0,00</strong>
+                        <small>Valor médio</small>
+                    </article>
+
+                </div>
+
+                <div class="panel sales-container">
+
+                    <div class="toolbar">
+
+                        <div class="search-box">
+                            <span>⌕</span>
+                            <input
+                                id="salesSearch"
+                                type="search"
+                                placeholder="Buscar por cliente..."
+                            >
+                        </div>
+
+                        <select id="salesStatusFilter">
+                            <option value="all">Todos os status</option>
+                            <option value="pending">Pendentes</option>
+                            <option value="received">Recebidas</option>
+                            <option value="cancelled">Canceladas</option>
+                        </select>
+
+                        <select id="salesResponsibleFilter">
+                            <option value="all">Todos os responsáveis</option>
+                        </select>
+
+                    </div>
+
+                    <div id="salesList" class="sales-list"></div>
+
+                </div>
+
+            </section>
+
+
+            <!-- ================= CLIENTES ================= -->
+
+            <section class="page" id="page-clients">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">CRM</span>
+                        <h1>Clientes</h1>
+                        <p>Gerencie seus contatos e oportunidades.</p>
+                    </div>
+
+                    <button class="primary-button admin-only" data-action="new-client">
+                        + Novo cliente
+                    </button>
+
+                </div>
+
+                <div class="client-metrics">
+
+                    <div>
+                        <span>Total</span>
+                        <strong id="clientTotal">0</strong>
+                    </div>
+
+                    <div>
+                        <span>Leads</span>
+                        <strong id="clientLeads">0</strong>
+                    </div>
+
+                    <div>
+                        <span>Negociação</span>
+                        <strong id="clientNegotiation">0</strong>
+                    </div>
+
+                    <div>
+                        <span>Clientes</span>
+                        <strong id="clientCustomers">0</strong>
+                    </div>
+
+                </div>
+
+                <div class="panel">
+
+                    <div class="toolbar">
+
+                        <div class="search-box">
+                            <span>⌕</span>
+                            <input
+                                id="clientSearch"
+                                type="search"
+                                placeholder="Buscar cliente, empresa ou telefone..."
+                            >
+                        </div>
+
+                        <select id="clientStatusFilter">
+                            <option value="all">Todos</option>
+                            <option value="lead">Lead</option>
+                            <option value="contact">Contato</option>
+                            <option value="negotiation">Negociação</option>
+                            <option value="customer">Cliente</option>
+                            <option value="inactive">Inativo</option>
+                        </select>
+
+                    </div>
+
+                    <div id="clientList" class="client-grid"></div>
+
+                </div>
+
+            </section>
+
+
+            <!-- ================= TAREFAS ================= -->
+
+            <section class="page" id="page-tasks">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">OPERAÇÃO</span>
+                        <h1>Tarefas</h1>
+                        <p>Organize e acompanhe as atividades da equipe.</p>
+                    </div>
+
+                    <button class="primary-button admin-only" data-action="new-task">
+                        + Nova tarefa
+                    </button>
+
+                </div>
+
+                <div class="stats-grid compact">
+
+                    <article class="stat-card purple">
+                        <div class="stat-top">
+                            <span>Total</span>
+                            <div class="stat-icon">✓</div>
+                        </div>
+                        <strong id="taskTotal">0</strong>
+                        <small>Tarefas</small>
+                    </article>
+
+                    <article class="stat-card orange">
+                        <div class="stat-top">
+                            <span>Pendentes</span>
+                            <div class="stat-icon">◷</div>
+                        </div>
+                        <strong id="taskPending">0</strong>
+                        <small>Em aberto</small>
+                    </article>
+
+                    <article class="stat-card green">
+                        <div class="stat-top">
+                            <span>Concluídas</span>
+                            <div class="stat-icon">✓</div>
+                        </div>
+                        <strong id="taskCompleted">0</strong>
+                        <small>Finalizadas</small>
+                    </article>
+
+                    <article class="stat-card red">
+                        <div class="stat-top">
+                            <span>Atrasadas</span>
+                            <div class="stat-icon">!</div>
+                        </div>
+                        <strong id="taskOverdue">0</strong>
+                        <small>Precisam atenção</small>
+                    </article>
+
+                </div>
+
+                <div class="panel">
+
+                    <div class="filter-tabs">
+
+                        <button class="active" data-task-filter="all">
+                            Todas
+                        </button>
+
+                        <button data-task-filter="pending">
+                            Pendentes
+                        </button>
+
+                        <button data-task-filter="completed">
+                            Concluídas
+                        </button>
+
+                        <button data-task-filter="overdue">
+                            Atrasadas
+                        </button>
+
+                    </div>
+
+                    <div id="fullTaskList" class="task-list"></div>
+
+                </div>
+
+            </section>
+
+
+            <!-- ================= METAS ================= -->
+
+            <section class="page" id="page-goals">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">PERFORMANCE</span>
+                        <h1>Metas</h1>
+                        <p>Acompanhe os objetivos da NEXA.</p>
+                    </div>
+
+                </div>
+
+                <div class="panel goal-main">
+
+                    <div>
+                        <span class="eyebrow">META GERAL</span>
+                        <h2 id="generalGoal">R$ 0,00</h2>
+                        <p>Meta de faturamento</p>
+                    </div>
+
+                    <button
+                        class="secondary-button admin-only"
+                        data-action="edit-general-goal"
+                    >
+                        Editar meta
+                    </button>
+
+                </div>
+
+                <div class="panel">
+
+                    <div class="panel-header">
+                        <div>
+                            <span class="eyebrow">EQUIPE</span>
+                            <h2>Metas individuais</h2>
+                        </div>
+                    </div>
+
+                    <div id="employeeGoals" class="employee-goals"></div>
+
+                </div>
+
+            </section>
+
+
+            <!-- ================= EQUIPE ================= -->
+
+            <section class="page" id="page-team">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">GESTÃO</span>
+                        <h1>Equipe</h1>
+                        <p>Acompanhe a produtividade de cada colaborador.</p>
+                    </div>
+
+                </div>
+
+                <div id="teamList" class="team-grid"></div>
+
+            </section>
+
+
+            <!-- ================= RELATÓRIOS ================= -->
+
+            <section class="page" id="page-reports">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">ANÁLISE</span>
+                        <h1>Relatórios</h1>
+                        <p>Indicadores gerais da operação.</p>
+                    </div>
+
+                </div>
+
+                <div class="report-grid">
+
+                    <div class="report-card">
+                        <span>Clientes</span>
+                        <strong id="reportClients">0</strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>Vendas</span>
+                        <strong id="reportSales">0</strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>Faturamento</span>
+                        <strong id="reportRevenue">R$ 0,00</strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>Tarefas</span>
+                        <strong id="reportTasks">0</strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>Concluídas</span>
+                        <strong id="reportCompleted">0</strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>Ticket médio</span>
+                        <strong id="reportAverage">R$ 0,00</strong>
+                    </div>
+
+                </div>
+
+                <div class="panel">
+
+                    <div class="panel-header">
+                        <div>
+                            <span class="eyebrow">DESEMPENHO</span>
+                            <h2>Vendas por responsável</h2>
+                        </div>
+                    </div>
+
+                    <div id="reportRanking" class="report-ranking"></div>
+
+                </div>
+
+            </section>
+
+
+            <!-- ================= CONFIGURAÇÕES ================= -->
+
+            <section class="page" id="page-settings">
+
+                <div class="page-heading">
+
+                    <div>
+                        <span class="eyebrow">SISTEMA</span>
+                        <h1>Configurações</h1>
+                        <p>Gerencie os dados locais do NEXA Management.</p>
+                    </div>
+
+                </div>
+
+                <div class="settings-grid">
+
+                    <div class="panel setting-card">
+
+                        <div class="setting-icon">↓</div>
+
+                        <div>
+                            <h2>Exportar dados</h2>
+                            <p>Baixe uma cópia de segurança dos dados.</p>
+                        </div>
+
+                        <button class="secondary-button" data-action="export-data">
+                            Exportar
+                        </button>
+
+                    </div>
+
+                    <div class="panel setting-card">
+
+                        <div class="setting-icon">↑</div>
+
+                        <div>
+                            <h2>Importar dados</h2>
+                            <p>Restaure um arquivo exportado anteriormente.</p>
+                        </div>
+
+                        <button class="secondary-button" data-action="import-data">
+                            Importar
+                        </button>
+
+                        <input
+                            type="file"
+                            id="importFile"
+                            accept=".json"
+                            hidden
+                        >
+
+                    </div>
+
+                    <div class="panel setting-card danger-setting">
+
+                        <div class="setting-icon">!</div>
+
+                        <div>
+                            <h2>Resetar sistema</h2>
+                            <p>Apaga os dados salvos neste navegador.</p>
+                        </div>
+
+                        <button class="danger-button" data-action="reset-data">
+                            Resetar
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+        </div>
+
+    </main>
+
+</div>
+
+
+<!-- MODAL -->
+
+<div class="modal-overlay" id="modalOverlay">
+
+    <div class="modal">
+
+        <div class="modal-header">
+
+            <div>
+                <span class="eyebrow" id="modalEyebrow">
+                    NEXA
+                </span>
+
+                <h2 id="modalTitle">
+                    Novo registro
+                </h2>
+            </div>
+
+            <button class="modal-close" id="modalClose">
+                ×
+            </button>
+
+        </div>
+
+        <form id="modalForm">
+
+            <div id="modalBody"></div>
+
+            <div class="modal-actions">
+
+                <button
+                    type="button"
+                    class="secondary-button"
+                    id="modalCancel"
+                >
+                    Cancelar
+                </button>
+
+                <button
+                    type="submit"
+                    class="primary-button"
+                    id="modalSubmit"
+                >
+                    Salvar
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+
+</div>
+
+
+<!-- TOASTS -->
+
+<div class="toast-container" id="toastContainer"></div>
+
+
+<script src="script.js"></script>
+
+</body>
+</html>
