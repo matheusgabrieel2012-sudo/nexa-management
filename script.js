@@ -1,11 +1,19 @@
 /* =========================================================
    NEXA MANAGEMENT
    SCRIPT PRINCIPAL
-   Banco online via Vercel API + Supabase
-   Sem login para funcionários
+   ========================================================= */
+
+"use strict";
+
+/* =========================================================
+   CONFIGURAÇÃO
    ========================================================= */
 
 const API_URL = "/api/nexa-data.js";
+const ADMIN_TOKEN_KEY = "nexaAdminToken";
+const USER_NAME_KEY = "nexaCurrentUserName";
+
+const POLL_INTERVAL = 8000;
 
 let data = defaultData();
 let currentUser = {
@@ -15,14 +23,21 @@ let currentUser = {
     avatar: "A"
 };
 
-let isAdmin = false;
-let adminToken = localStorage.getItem("nexaAdminToken") || "";
+let adminToken =
+    localStorage.getItem(ADMIN_TOKEN_KEY) || "";
+
+let selectedUserName =
+    localStorage.getItem(USER_NAME_KEY) || "";
+
+let isAdmin = Boolean(adminToken);
+
+let currentPage = "dashboard";
+let currentModal = null;
+let editingId = null;
+
 let isSaving = false;
 let isLoading = false;
 let pollTimer = null;
-let currentModalType = null;
-let currentModalId = null;
-
 
 /* =========================================================
    USUÁRIOS
@@ -52,7 +67,6 @@ const USERS = [
     }
 ];
 
-
 /* =========================================================
    DADOS PADRÃO
    ========================================================= */
@@ -72,79 +86,99 @@ function defaultData() {
     };
 }
 
-
 /* =========================================================
    UTILITÁRIOS
    ========================================================= */
 
 function uid(prefix = "id") {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    return (
+        prefix +
+        "_" +
+        Date.now().toString(36) +
+        "_" +
+        Math.random().toString(36).substring(2, 9)
+    );
 }
 
 function escapeHTML(value) {
-    if (value === null || value === undefined) return "";
-
-    return String(value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
-function initials(name = "") {
-    return name
-        .split(" ")
-        .filter(Boolean)
+function initials(name) {
+    if (!name) return "?";
+
+    return String(name)
+        .trim()
+        .split(/\s+/)
         .slice(0, 2)
-        .map(word => word[0])
+        .map(part => part[0])
         .join("")
         .toUpperCase();
 }
 
 function currency(value) {
-    return Number(value || 0).toLocaleString("pt-BR", {
+    const number = Number(value) || 0;
+
+    return number.toLocaleString("pt-BR", {
         style: "currency",
         currency: "BRL"
     });
 }
 
 function formatDate(date) {
-    if (!date) return "—";
+    if (!date) return "-";
 
-    const d = new Date(date + (String(date).length === 10 ? "T12:00:00" : ""));
+    const parsed = new Date(date);
 
-    if (Number.isNaN(d.getTime())) return "—";
+    if (Number.isNaN(parsed.getTime())) {
+        return "-";
+    }
 
-    return d.toLocaleDateString("pt-BR");
+    return parsed.toLocaleDateString("pt-BR");
 }
 
 function today() {
-    return new Date().toISOString().slice(0, 10);
+    return new Date().toISOString().split("T")[0];
 }
 
-function findUser(name) {
-    return USERS.find(user => user.nome === name) || null;
+function setText(id, value) {
+    const element = document.getElementById(id);
+
+    if (element) {
+        element.textContent = value ?? "";
+    }
 }
 
-function getEmployees() {
-    return USERS.filter(user => user.permissao !== "admin");
-}
+function setHTML(id, html) {
+    const element = document.getElementById(id);
 
-function getClient(id) {
-    return data.clients.find(client => client.id === id);
+    if (element) {
+        element.innerHTML = html;
+    }
 }
 
 function showToast(message, type = "success") {
-    const container = document.getElementById("toastContainer");
+    const container =
+        document.getElementById("toastContainer");
 
-    if (!container) return;
+    if (!container) {
+        alert(message);
+        return;
+    }
 
     const toast = document.createElement("div");
 
     toast.className = `toast toast-${type}`;
+
     toast.innerHTML = `
-        <span>${escapeHTML(message)}</span>
+        <div class="toast-content">
+            ${escapeHTML(message)}
+        </div>
     `;
 
     container.appendChild(toast);
@@ -162,80 +196,397 @@ function showToast(message, type = "success") {
     }, 3000);
 }
 
+function findUser(name) {
+    return (
+        USERS.find(
+            user => user.nome === name
+        ) || USERS[0]
+    );
+}
+
+function getEmployees() {
+    return USERS.filter(
+        user => user.permissao !== "admin"
+    );
+}
+
+function getClient(id) {
+    return data.clients.find(
+        client => client.id === id
+    );
+}
+
+function addActivity(
+    type,
+    title,
+    description = ""
+) {
+    data.activities.unshift({
+        id: uid("activity"),
+        type,
+        title,
+        description,
+        date: new Date().toISOString()
+    });
+
+    data.activities =
+        data.activities.slice(0, 100);
+}
+
+function addNotification(
+    title,
+    message,
+    type = "info"
+) {
+    data.notifications.unshift({
+        id: uid("notification"),
+        title,
+        message,
+        type,
+        read: false,
+        date: new Date().toISOString()
+    });
+
+    data.notifications =
+        data.notifications.slice(0, 50);
+}
 
 /* =========================================================
-   NORMALIZAÇÃO
+   USUÁRIO ATUAL
    ========================================================= */
 
-function normalizeData(raw) {
-    const base = defaultData();
+function updateCurrentUser() {
 
-    if (!raw || typeof raw !== "object") {
-        return base;
+    if (isAdmin) {
+        currentUser = {
+            id: "admin",
+            nome: "Administrador",
+            cargo: "Administrador",
+            permissao: "admin",
+            avatar: "A"
+        };
+
+        return;
     }
 
-    return {
-        clients: Array.isArray(raw.clients) ? raw.clients : [],
-        sales: Array.isArray(raw.sales) ? raw.sales : [],
-        tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
-        activities: Array.isArray(raw.activities) ? raw.activities : [],
-        notifications: Array.isArray(raw.notifications) ? raw.notifications : [],
-        goals: {
-            general: Number(raw.goals?.general || 0),
-            employees: raw.goals?.employees || {}
-        },
-        settings: raw.settings || {}
+    const selected =
+        USERS.find(
+            user =>
+                user.nome === selectedUserName
+        );
+
+    if (selected) {
+        currentUser = {
+            ...selected
+        };
+
+        return;
+    }
+
+    currentUser = {
+        id: "viewer",
+        nome: "NEXA",
+        cargo: "Visualização",
+        permissao: "employee",
+        avatar: "N"
     };
 }
 
-function normalizeClient(client) {
-    return {
-        id: client.id || uid("client"),
-        name: client.name || "",
-        company: client.company || "",
-        phone: client.phone || "",
-        email: client.email || "",
-        status: client.status || "lead",
-        responsible: client.responsible || "Administrador",
-        potential: Number(client.potential || 0),
-        notes: client.notes || "",
-        createdAt: client.createdAt || today()
-    };
-}
+function updateProfileUI() {
 
-function normalizeSale(sale) {
-    return {
-        id: sale.id || uid("sale"),
-        clientId: sale.clientId || "",
-        value: Number(sale.value || 0),
-        date: sale.date || today(),
-        responsible: sale.responsible || "Administrador",
-        status: sale.status || "pending",
-        payment: sale.payment || "pix",
-        notes: sale.notes || "",
-        createdAt: sale.createdAt || new Date().toISOString()
-    };
-}
+    updateCurrentUser();
 
-function normalizeTask(task) {
-    return {
-        id: task.id || uid("task"),
-        title: task.title || "",
-        description: task.description || "",
-        dueDate: task.dueDate || today(),
-        priority: task.priority || "medium",
-        owner: task.owner || "Administrador",
-        completed: Boolean(task.completed),
-        createdAt: task.createdAt || new Date().toISOString()
-    };
-}
+    setText(
+        "topUserName",
+        currentUser.nome
+    );
 
+    setText(
+        "topUserRole",
+        currentUser.cargo
+    );
+
+    setText(
+        "topAvatar",
+        currentUser.avatar ||
+            initials(currentUser.nome)
+    );
+
+    const welcomeName =
+        isAdmin
+            ? "Administrador"
+            : currentUser.nome;
+
+    setText(
+        "welcomeName",
+        welcomeName
+    );
+
+    document
+        .querySelectorAll(".admin-only")
+        .forEach(element => {
+            element.style.display =
+                isAdmin ? "" : "none";
+        });
+}
 
 /* =========================================================
-   API — CARREGAR DADOS
+   ESCOLHER USUÁRIO
    ========================================================= */
 
-async function loadData(showMessage = false) {
+function requestUserSelection() {
+
+    if (isAdmin) return;
+
+    const existing =
+        document.getElementById(
+            "nexaUserSelector"
+        );
+
+    if (existing) {
+        existing.remove();
+    }
+
+    const overlay =
+        document.createElement("div");
+
+    overlay.id =
+        "nexaUserSelector";
+
+    overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(0,0,0,.82);
+        backdrop-filter: blur(16px);
+    `;
+
+    overlay.innerHTML = `
+        <div style="
+            width:min(440px,100%);
+            background:#11111a;
+            border:1px solid rgba(255,255,255,.1);
+            border-radius:24px;
+            padding:28px;
+            box-shadow:0 25px 80px rgba(0,0,0,.5);
+        ">
+
+            <div style="
+                color:#8b5cf6;
+                font-size:12px;
+                font-weight:700;
+                text-transform:uppercase;
+                letter-spacing:.12em;
+                margin-bottom:10px;
+            ">
+                NEXA MANAGEMENT
+            </div>
+
+            <h2 style="
+                color:#fff;
+                margin:0 0 8px;
+                font-size:24px;
+            ">
+                Quem está acessando?
+            </h2>
+
+            <p style="
+                color:#8c8d9b;
+                margin:0 0 22px;
+                line-height:1.5;
+            ">
+                Escolha seu nome para personalizar
+                o painel. Isso não é um login.
+            </p>
+
+            <div style="
+                display:grid;
+                gap:10px;
+            ">
+
+                ${getEmployees()
+                    .map(
+                        user => `
+                        <button
+                            type="button"
+                            data-nexa-user="${escapeHTML(
+                                user.nome
+                            )}"
+                            style="
+                                width:100%;
+                                display:flex;
+                                align-items:center;
+                                gap:14px;
+                                padding:15px;
+                                border-radius:16px;
+                                border:1px solid rgba(255,255,255,.08);
+                                background:rgba(255,255,255,.04);
+                                color:#fff;
+                                cursor:pointer;
+                                text-align:left;
+                            "
+                        >
+                            <span style="
+                                width:42px;
+                                height:42px;
+                                display:flex;
+                                align-items:center;
+                                justify-content:center;
+                                border-radius:50%;
+                                background:rgba(139,92,246,.16);
+                                color:#a78bfa;
+                                font-weight:800;
+                            ">
+                                ${escapeHTML(
+                                    user.avatar
+                                )}
+                            </span>
+
+                            <span>
+                                <strong style="display:block;">
+                                    ${escapeHTML(
+                                        user.nome
+                                    )}
+                                </strong>
+
+                                <small style="
+                                    color:#8c8d9b;
+                                ">
+                                    ${escapeHTML(
+                                        user.cargo
+                                    )}
+                                </small>
+                            </span>
+                        </button>
+                    `
+                    )
+                    .join("")}
+
+            </div>
+
+            <button
+                type="button"
+                data-nexa-admin-access
+                style="
+                    width:100%;
+                    margin-top:14px;
+                    padding:13px;
+                    border:0;
+                    border-radius:14px;
+                    background:#8b5cf6;
+                    color:white;
+                    font-weight:700;
+                    cursor:pointer;
+                "
+            >
+                Entrar como administrador
+            </button>
+
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    overlay
+        .querySelectorAll(
+            "[data-nexa-user]"
+        )
+        .forEach(button => {
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    selectedUserName =
+                        button.dataset.nexaUser;
+
+                    localStorage.setItem(
+                        USER_NAME_KEY,
+                        selectedUserName
+                    );
+
+                    overlay.remove();
+
+                    updateProfileUI();
+                    renderAll();
+                }
+            );
+        });
+
+    const adminButton =
+        overlay.querySelector(
+            "[data-nexa-admin-access]"
+        );
+
+    adminButton?.addEventListener(
+        "click",
+        () => {
+
+            overlay.remove();
+
+            requestAdminAccess();
+        }
+    );
+}
+
+/* =========================================================
+   ADMIN
+   ========================================================= */
+
+function requestAdminAccess() {
+
+    const token = prompt(
+        "Digite o token de administrador:"
+    );
+
+    if (!token) return;
+
+    adminToken =
+        token.trim();
+
+    localStorage.setItem(
+        ADMIN_TOKEN_KEY,
+        adminToken
+    );
+
+    isAdmin = true;
+
+    updateProfileUI();
+    renderAll();
+
+    showToast(
+        "Modo administrador ativado."
+    );
+}
+
+function exitAdminMode() {
+
+    adminToken = "";
+
+    localStorage.removeItem(
+        ADMIN_TOKEN_KEY
+    );
+
+    isAdmin = false;
+
+    updateCurrentUser();
+    updateProfileUI();
+    renderAll();
+
+    showToast(
+        "Modo visualização ativado."
+    );
+}
+
+/* =========================================================
+   API — CARREGAR
+   ========================================================= */
+
+async function loadData(showLoading = true) {
 
     if (isLoading) return;
 
@@ -243,39 +594,48 @@ async function loadData(showMessage = false) {
 
     try {
 
-        const response = await fetch(`${API_URL}?t=${Date.now()}`, {
-            method: "GET",
-            cache: "no-store"
-        });
+        if (showLoading) {
+            showToast(
+                "Sincronizando dados..."
+            );
+        }
+
+        const response =
+            await fetch(
+                `${API_URL}?t=${Date.now()}`,
+                {
+                    method: "GET",
+                    cache: "no-store"
+                }
+            );
+
+        const result =
+            await response.json();
 
         if (!response.ok) {
-            throw new Error(`Erro HTTP ${response.status}`);
+            throw new Error(
+                result?.details ||
+                result?.error ||
+                "Erro ao carregar dados."
+            );
         }
 
-        const result = await response.json();
-
-        if (!result.data) {
-            throw new Error("API não retornou os dados do NEXA.");
-        }
-
-        data = normalizeData(result.data);
-
-        data.clients = data.clients.map(normalizeClient);
-        data.sales = data.sales.map(normalizeSale);
-        data.tasks = data.tasks.map(normalizeTask);
+        data =
+            normalizeData(
+                result.data
+            );
 
         renderAll();
 
-        if (showMessage) {
-            showToast("Dados sincronizados.");
-        }
-
     } catch (error) {
 
-        console.error("Erro ao carregar NEXA:", error);
+        console.error(
+            "Erro ao carregar dados:",
+            error
+        );
 
         showToast(
-            "Não foi possível carregar os dados online.",
+            "Não foi possível sincronizar os dados.",
             "error"
         );
 
@@ -285,16 +645,15 @@ async function loadData(showMessage = false) {
     }
 }
 
-
 /* =========================================================
-   API — SALVAR DADOS
+   API — SALVAR
    ========================================================= */
 
-async function saveData(showMessage = false) {
+async function saveData(showMessage = true) {
 
     if (!isAdmin) {
         showToast(
-            "Somente o administrador pode alterar os dados.",
+            "Apenas o administrador pode alterar dados.",
             "error"
         );
 
@@ -303,52 +662,87 @@ async function saveData(showMessage = false) {
 
     if (!adminToken) {
         showToast(
-            "Ative o modo administrador primeiro.",
+            "Token de administrador não encontrado.",
             "error"
         );
 
         return false;
     }
 
-    if (isSaving) return false;
+    if (isSaving) {
+        return false;
+    }
 
     isSaving = true;
 
     try {
 
-        const response = await fetch(API_URL, {
-            method: "PUT",
+        const response =
+            await fetch(
+                API_URL,
+                {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                        "x-nexa-admin-token":
+                            adminToken
+                    },
+                    body:
+                        JSON.stringify(data)
+                }
+            );
 
-            headers: {
-                "Content-Type": "application/json",
-                "x-nexa-admin-token": adminToken
-            },
-
-            body: JSON.stringify(data)
-        });
-
-        const result = await response.json();
+        const result =
+            await response.json();
 
         if (!response.ok) {
+
+            if (
+                response.status === 401
+            ) {
+
+                exitAdminMode();
+
+                throw new Error(
+                    "Token de administrador inválido."
+                );
+            }
+
             throw new Error(
-                result.error || "Erro ao salvar os dados."
+                result?.details ||
+                result?.error ||
+                "Erro ao salvar dados."
             );
         }
 
-        data = normalizeData(result.data || data);
+        if (result.data) {
+            data =
+                normalizeData(
+                    result.data
+                );
+        }
 
         if (showMessage) {
-            showToast("Alterações salvas online.");
+            showToast(
+                "Alterações salvas."
+            );
         }
+
+        renderAll();
 
         return true;
 
     } catch (error) {
 
-        console.error("Erro ao salvar:", error);
+        console.error(
+            "Erro ao salvar:",
+            error
+        );
 
         showToast(
-            error.message || "Erro ao salvar os dados.",
+            error.message ||
+                "Erro ao salvar alterações.",
             "error"
         );
 
@@ -360,104 +754,211 @@ async function saveData(showMessage = false) {
     }
 }
 
-
 /* =========================================================
-   ATIVIDADES
+   NORMALIZAÇÃO DOS DADOS
    ========================================================= */
 
-function addActivity(text, type = "system") {
+function normalizeData(raw) {
 
-    data.activities.unshift({
-        id: uid("activity"),
-        text,
-        type,
-        date: new Date().toISOString(),
-        user: currentUser.nome
-    });
+    const base =
+        defaultData();
 
-    data.activities = data.activities.slice(0, 100);
-}
-
-
-/* =========================================================
-   PERFIL / ADMIN
-   ========================================================= */
-
-function updateProfileUI() {
-
-    const name = document.getElementById("topUserName");
-    const role = document.getElementById("topUserRole");
-    const avatar = document.getElementById("topAvatar");
-
-    if (name) {
-        name.textContent = isAdmin
-            ? "Administrador"
-            : "Visualização";
+    if (!raw || typeof raw !== "object") {
+        return base;
     }
 
-    if (role) {
-        role.textContent = isAdmin
-            ? "Administrador"
-            : "Funcionário";
-    }
+    return {
+        clients:
+            Array.isArray(raw.clients)
+                ? raw.clients.map(
+                      normalizeClient
+                  )
+                : [],
 
-    if (avatar) {
-        avatar.textContent = isAdmin ? "A" : "N";
-    }
+        sales:
+            Array.isArray(raw.sales)
+                ? raw.sales.map(
+                      normalizeSale
+                  )
+                : [],
 
-    document.querySelectorAll(".admin-only").forEach(element => {
-        element.style.display = isAdmin ? "" : "none";
-    });
+        tasks:
+            Array.isArray(raw.tasks)
+                ? raw.tasks.map(
+                      normalizeTask
+                  )
+                : [],
+
+        activities:
+            Array.isArray(raw.activities)
+                ? raw.activities
+                : [],
+
+        notifications:
+            Array.isArray(raw.notifications)
+                ? raw.notifications
+                : [],
+
+        goals: {
+            general:
+                Number(
+                    raw.goals?.general
+                ) || 0,
+
+            employees:
+                raw.goals?.employees &&
+                typeof raw.goals.employees ===
+                    "object"
+                    ? raw.goals.employees
+                    : {}
+        },
+
+        settings:
+            raw.settings &&
+            typeof raw.settings ===
+                "object"
+                ? raw.settings
+                : {}
+    };
 }
 
+function normalizeClient(client) {
 
-/* =========================================================
-   MODO ADMINISTRADOR
-   ========================================================= */
+    return {
+        id:
+            client?.id ||
+            uid("client"),
 
-function requestAdminAccess() {
+        name:
+            client?.name ||
+            client?.nome ||
+            "",
 
-    if (isAdmin) {
-        exitAdminMode();
-        return;
-    }
+        company:
+            client?.company ||
+            client?.empresa ||
+            "",
 
-    const token = prompt(
-        "Digite o token do administrador:"
-    );
+        phone:
+            client?.phone ||
+            client?.telefone ||
+            "",
 
-    if (!token) return;
+        email:
+            client?.email ||
+            "",
 
-    adminToken = token;
+        status:
+            client?.status ||
+            "lead",
 
-    localStorage.setItem(
-        "nexaAdminToken",
-        token
-    );
+        responsible:
+            client?.responsible ||
+            client?.responsavel ||
+            "Arthur Rodrigues",
 
-    isAdmin = true;
+        potential:
+            Number(
+                client?.potential
+            ) || 0,
 
-    updateProfileUI();
+        notes:
+            client?.notes ||
+            client?.observacoes ||
+            "",
 
-    showToast("Modo administrador ativado.");
-
-    renderAll();
+        createdAt:
+            client?.createdAt ||
+            new Date().toISOString()
+    };
 }
 
-function exitAdminMode() {
+function normalizeSale(sale) {
 
-    isAdmin = false;
-    adminToken = "";
+    return {
+        id:
+            sale?.id ||
+            uid("sale"),
 
-    localStorage.removeItem("nexaAdminToken");
+        clientId:
+            sale?.clientId ||
+            sale?.clienteId ||
+            "",
 
-    updateProfileUI();
+        value:
+            Number(
+                sale?.value
+            ) || 0,
 
-    showToast("Modo administrador encerrado.");
+        date:
+            sale?.date ||
+            today(),
 
-    renderAll();
+        responsible:
+            sale?.responsible ||
+            sale?.responsavel ||
+            "Arthur Rodrigues",
+
+        status:
+            sale?.status ||
+            "pending",
+
+        payment:
+            sale?.payment ||
+            "pending",
+
+        notes:
+            sale?.notes ||
+            "",
+
+        createdAt:
+            sale?.createdAt ||
+            new Date().toISOString()
+    };
 }
 
+function normalizeTask(task) {
+
+    return {
+        id:
+            task?.id ||
+            uid("task"),
+
+        title:
+            task?.title ||
+            task?.titulo ||
+            "",
+
+        description:
+            task?.description ||
+            task?.descricao ||
+            "",
+
+        dueDate:
+            task?.dueDate ||
+            task?.data ||
+            today(),
+
+        priority:
+            task?.priority ||
+            "medium",
+
+        owner:
+            task?.owner ||
+            task?.responsible ||
+            task?.responsavel ||
+            "Arthur Rodrigues",
+
+        completed:
+            Boolean(
+                task?.completed
+            ),
+
+        createdAt:
+            task?.createdAt ||
+            new Date().toISOString()
+    };
+}
 
 /* =========================================================
    NAVEGAÇÃO
@@ -467,14 +968,14 @@ function navigateTo(page) {
 
     if (!page) return;
 
-    const adminPages = [
+    const restrictedPages = [
         "team",
         "reports",
         "settings"
     ];
 
     if (
-        adminPages.includes(page) &&
+        restrictedPages.includes(page) &&
         !isAdmin
     ) {
         showToast(
@@ -485,22 +986,31 @@ function navigateTo(page) {
         return;
     }
 
-    document.querySelectorAll(".page").forEach(section => {
-        section.classList.remove("active");
-    });
+    currentPage = page;
 
-    const target = document.getElementById(page);
+    document
+        .querySelectorAll("[data-page]")
+        .forEach(item => {
 
-    if (target) {
-        target.classList.add("active");
-    }
+            item.classList.toggle(
+                "active",
+                item.dataset.page === page
+            );
+        });
 
-    document.querySelectorAll("[data-page]").forEach(item => {
-        item.classList.toggle(
-            "active",
-            item.dataset.page === page
-        );
-    });
+    document
+        .querySelectorAll(".page")
+        .forEach(section => {
+
+            const shouldShow =
+                section.id === page ||
+                section.dataset.page === page;
+
+            section.classList.toggle(
+                "active",
+                shouldShow
+            );
+        });
 
     const titles = {
         dashboard: "Dashboard",
@@ -513,16 +1023,15 @@ function navigateTo(page) {
         settings: "Configurações"
     };
 
-    const pageTitle = document.getElementById("pageTitle");
+    setText(
+        "pageTitle",
+        titles[page] || "NEXA Management"
+    );
 
-    if (pageTitle) {
-        pageTitle.textContent =
-            titles[page] || "NEXA Management";
-    }
-
-    document.body.classList.remove("mobile-menu-open");
+    document.body.classList.remove(
+        "mobile-menu-open"
+    );
 }
-
 
 /* =========================================================
    MODAL
@@ -531,70 +1040,103 @@ function navigateTo(page) {
 function openModal(type, id = null) {
 
     if (!isAdmin) {
+
         showToast(
-            "Somente o administrador pode editar.",
+            "Apenas o administrador pode editar.",
             "error"
         );
 
         return;
     }
 
-    const overlay = document.getElementById("modalOverlay");
-    const title = document.getElementById("modalTitle");
-    const eyebrow = document.getElementById("modalEyebrow");
-    const body = document.getElementById("modalBody");
-    const submit = document.getElementById("modalSubmit");
+    const overlay =
+        document.getElementById(
+            "modalOverlay"
+        );
 
-    if (!overlay || !body) return;
+    const body =
+        document.getElementById(
+            "modalBody"
+        );
 
-    currentModalType = type;
-    currentModalId = id;
+    const title =
+        document.getElementById(
+            "modalTitle"
+        );
 
-    let html = "";
+    const eyebrow =
+        document.getElementById(
+            "modalEyebrow"
+        );
 
-    /* =========================
-       VENDA
-       ========================= */
+    const form =
+        document.getElementById(
+            "modalForm"
+        );
+
+    if (
+        !overlay ||
+        !body ||
+        !title ||
+        !form
+    ) {
+        return;
+    }
+
+    currentModal = type;
+    editingId = id;
+
+    form.reset();
+
+    let content = "";
 
     if (type === "sale") {
 
-        const sale = id
-            ? data.sales.find(item => item.id === id)
-            : null;
+        const sale =
+            data.sales.find(
+                item => item.id === id
+            );
 
-        eyebrow.textContent = sale
-            ? "Editar"
-            : "Nova";
+        eyebrow.textContent =
+            id ? "Editar venda" : "Nova venda";
 
-        title.textContent = "Venda";
+        title.textContent =
+            id ? "Editar venda" : "Registrar venda";
 
-        submit.textContent = sale
-            ? "Salvar alterações"
-            : "Cadastrar venda";
-
-        html = `
-            <div class="form-group">
-                <label>Cliente</label>
-
-                <select id="modalSaleClient" required>
-                    <option value="">Selecione um cliente</option>
-
-                    ${data.clients.map(client => `
-                        <option
-                            value="${escapeHTML(client.id)}"
-                            ${sale?.clientId === client.id ? "selected" : ""}
-                        >
-                            ${escapeHTML(
-                                client.name ||
-                                client.company ||
-                                "Cliente"
-                            )}
-                        </option>
-                    `).join("")}
-                </select>
-            </div>
-
+        content = `
             <div class="form-grid">
+
+                <div class="form-group">
+                    <label>Cliente</label>
+
+                    <select id="modalClient" required>
+                        <option value="">
+                            Selecione um cliente
+                        </option>
+
+                        ${data.clients
+                            .map(
+                                client => `
+                                <option
+                                    value="${escapeHTML(client.id)}"
+                                    ${
+                                        sale?.clientId ===
+                                        client.id
+                                            ? "selected"
+                                            : ""
+                                    }
+                                >
+                                    ${escapeHTML(
+                                        client.name ||
+                                        client.company ||
+                                        "Cliente"
+                                    )}
+                                </option>
+                            `
+                            )
+                            .join("")}
+                    </select>
+                </div>
 
                 <div class="form-group">
                     <label>Valor</label>
@@ -605,7 +1147,6 @@ function openModal(type, id = null) {
                         step="0.01"
                         min="0"
                         value="${sale?.value || ""}"
-                        placeholder="0,00"
                         required
                     >
                 </div>
@@ -621,32 +1162,31 @@ function openModal(type, id = null) {
                     >
                 </div>
 
-            </div>
-
-            <div class="form-grid">
-
                 <div class="form-group">
                     <label>Responsável</label>
 
                     <select id="modalSaleResponsible">
 
-                        <option value="Administrador"
-                            ${sale?.responsible === "Administrador" ? "selected" : ""}
-                        >
-                            Administrador
-                        </option>
-
-                        <option value="Arthur Rodrigues"
-                            ${sale?.responsible === "Arthur Rodrigues" ? "selected" : ""}
-                        >
-                            Arthur Rodrigues
-                        </option>
-
-                        <option value="Pietro de Jesus"
-                            ${sale?.responsible === "Pietro de Jesus" ? "selected" : ""}
-                        >
-                            Pietro de Jesus
-                        </option>
+                        ${USERS
+                            .map(
+                                user => `
+                                <option
+                                    value="${escapeHTML(user.nome)}"
+                                    ${
+                                        (
+                                            sale?.responsible ||
+                                            "Arthur Rodrigues"
+                                        ) ===
+                                        user.nome
+                                            ? "selected"
+                                            : ""
+                                    }
+                                >
+                                    ${escapeHTML(user.nome)}
+                                </option>
+                            `
+                            )
+                            .join("")}
 
                     </select>
                 </div>
@@ -655,96 +1195,111 @@ function openModal(type, id = null) {
                     <label>Status</label>
 
                     <select id="modalSaleStatus">
-
                         <option value="pending"
-                            ${sale?.status === "pending" ? "selected" : ""}
-                        >
+                            ${
+                                sale?.status ===
+                                "pending"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Pendente
                         </option>
 
-                        <option value="received"
-                            ${sale?.status === "received" ? "selected" : ""}
-                        >
+                        <option value="paid"
+                            ${
+                                sale?.status ===
+                                "paid"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Recebida
                         </option>
 
                         <option value="cancelled"
-                            ${sale?.status === "cancelled" ? "selected" : ""}
-                        >
+                            ${
+                                sale?.status ===
+                                "cancelled"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Cancelada
                         </option>
-
                     </select>
                 </div>
 
-            </div>
+                <div class="form-group">
+                    <label>Pagamento</label>
 
-            <div class="form-group">
-                <label>Pagamento</label>
+                    <select id="modalSalePayment">
 
-                <select id="modalSalePayment">
+                        <option value="pending"
+                            ${
+                                sale?.payment ===
+                                "pending"
+                                    ? "selected"
+                                    : ""
+                            }>
+                            Pendente
+                        </option>
 
-                    <option value="pix"
-                        ${sale?.payment === "pix" ? "selected" : ""}
-                    >
-                        PIX
-                    </option>
+                        <option value="pix"
+                            ${
+                                sale?.payment ===
+                                "pix"
+                                    ? "selected"
+                                    : ""
+                            }>
+                            PIX
+                        </option>
 
-                    <option value="card"
-                        ${sale?.payment === "card" ? "selected" : ""}
-                    >
-                        Cartão
-                    </option>
+                        <option value="card"
+                            ${
+                                sale?.payment ===
+                                "card"
+                                    ? "selected"
+                                    : ""
+                            }>
+                            Cartão
+                        </option>
 
-                    <option value="cash"
-                        ${sale?.payment === "cash" ? "selected" : ""}
-                    >
-                        Dinheiro
-                    </option>
+                        <option value="cash"
+                            ${
+                                sale?.payment ===
+                                "cash"
+                                    ? "selected"
+                                    : ""
+                            }>
+                            Dinheiro
+                        </option>
+                    </select>
+                </div>
 
-                    <option value="other"
-                        ${sale?.payment === "other" ? "selected" : ""}
-                    >
-                        Outro
-                    </option>
+                <div class="form-group full">
+                    <label>Observações</label>
 
-                </select>
-            </div>
+                    <textarea id="modalSaleNotes">${escapeHTML(
+                        sale?.notes || ""
+                    )}</textarea>
+                </div>
 
-            <div class="form-group">
-                <label>Observações</label>
-
-                <textarea
-                    id="modalSaleNotes"
-                    rows="4"
-                    placeholder="Observações da venda..."
-                >${escapeHTML(sale?.notes || "")}</textarea>
             </div>
         `;
     }
 
-
-    /* =========================
-       CLIENTE
-       ========================= */
-
     if (type === "client") {
 
-        const client = id
-            ? getClient(id)
-            : null;
+        const client =
+            data.clients.find(
+                item => item.id === id
+            );
 
-        eyebrow.textContent = client
-            ? "Editar"
-            : "Novo";
+        eyebrow.textContent =
+            id ? "Editar cliente" : "Novo cliente";
 
-        title.textContent = "Cliente";
+        title.textContent =
+            id ? "Editar cliente" : "Cadastrar cliente";
 
-        submit.textContent = client
-            ? "Salvar alterações"
-            : "Cadastrar cliente";
-
-        html = `
+        content = `
             <div class="form-grid">
 
                 <div class="form-group">
@@ -752,8 +1307,9 @@ function openModal(type, id = null) {
 
                     <input
                         id="modalClientName"
-                        value="${escapeHTML(client?.name || "")}"
-                        placeholder="Nome do cliente"
+                        value="${escapeHTML(
+                            client?.name || ""
+                        )}"
                         required
                     >
                 </div>
@@ -763,22 +1319,20 @@ function openModal(type, id = null) {
 
                     <input
                         id="modalClientCompany"
-                        value="${escapeHTML(client?.company || "")}"
-                        placeholder="Empresa"
+                        value="${escapeHTML(
+                            client?.company || ""
+                        )}"
                     >
                 </div>
-
-            </div>
-
-            <div class="form-grid">
 
                 <div class="form-group">
                     <label>Telefone</label>
 
                     <input
                         id="modalClientPhone"
-                        value="${escapeHTML(client?.phone || "")}"
-                        placeholder="(00) 00000-0000"
+                        value="${escapeHTML(
+                            client?.phone || ""
+                        )}"
                     >
                 </div>
 
@@ -788,14 +1342,11 @@ function openModal(type, id = null) {
                     <input
                         id="modalClientEmail"
                         type="email"
-                        value="${escapeHTML(client?.email || "")}"
-                        placeholder="cliente@email.com"
+                        value="${escapeHTML(
+                            client?.email || ""
+                        )}"
                     >
                 </div>
-
-            </div>
-
-            <div class="form-grid">
 
                 <div class="form-group">
                     <label>Status</label>
@@ -803,23 +1354,34 @@ function openModal(type, id = null) {
                     <select id="modalClientStatus">
 
                         <option value="lead"
-                            ${client?.status === "lead" ? "selected" : ""}
-                        >
+                            ${
+                                client?.status ===
+                                "lead"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Lead
                         </option>
 
                         <option value="negotiation"
-                            ${client?.status === "negotiation" ? "selected" : ""}
-                        >
+                            ${
+                                client?.status ===
+                                "negotiation"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Negociação
                         </option>
 
                         <option value="customer"
-                            ${client?.status === "customer" ? "selected" : ""}
-                        >
+                            ${
+                                client?.status ===
+                                "customer"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Cliente
                         </option>
-
                     </select>
                 </div>
 
@@ -828,101 +1390,92 @@ function openModal(type, id = null) {
 
                     <select id="modalClientResponsible">
 
-                        <option value="Administrador"
-                            ${client?.responsible === "Administrador" ? "selected" : ""}
-                        >
-                            Administrador
-                        </option>
-
-                        <option value="Arthur Rodrigues"
-                            ${client?.responsible === "Arthur Rodrigues" ? "selected" : ""}
-                        >
-                            Arthur Rodrigues
-                        </option>
-
-                        <option value="Pietro de Jesus"
-                            ${client?.responsible === "Pietro de Jesus" ? "selected" : ""}
-                        >
-                            Pietro de Jesus
-                        </option>
+                        ${USERS
+                            .map(
+                                user => `
+                                <option
+                                    value="${escapeHTML(user.nome)}"
+                                    ${
+                                        (
+                                            client?.responsible ||
+                                            "Arthur Rodrigues"
+                                        ) ===
+                                        user.nome
+                                            ? "selected"
+                                            : ""
+                                    }
+                                >
+                                    ${escapeHTML(user.nome)}
+                                </option>
+                            `
+                            )
+                            .join("")}
 
                     </select>
                 </div>
 
-            </div>
+                <div class="form-group">
+                    <label>Potencial</label>
 
-            <div class="form-group">
-                <label>Potencial</label>
+                    <input
+                        id="modalClientPotential"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value="${client?.potential || ""}"
+                    >
+                </div>
 
-                <input
-                    id="modalClientPotential"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value="${client?.potential || ""}"
-                    placeholder="0,00"
-                >
-            </div>
+                <div class="form-group full">
+                    <label>Observações</label>
 
-            <div class="form-group">
-                <label>Observações</label>
+                    <textarea id="modalClientNotes">${escapeHTML(
+                        client?.notes || ""
+                    )}</textarea>
+                </div>
 
-                <textarea
-                    id="modalClientNotes"
-                    rows="4"
-                    placeholder="Observações..."
-                >${escapeHTML(client?.notes || "")}</textarea>
             </div>
         `;
     }
 
-
-    /* =========================
-       TAREFA
-       ========================= */
-
     if (type === "task") {
 
-        const task = id
-            ? data.tasks.find(item => item.id === id)
-            : null;
+        const task =
+            data.tasks.find(
+                item => item.id === id
+            );
 
-        eyebrow.textContent = task
-            ? "Editar"
-            : "Nova";
+        eyebrow.textContent =
+            id ? "Editar tarefa" : "Nova tarefa";
 
-        title.textContent = "Tarefa";
+        title.textContent =
+            id ? "Editar tarefa" : "Criar tarefa";
 
-        submit.textContent = task
-            ? "Salvar alterações"
-            : "Criar tarefa";
-
-        html = `
-            <div class="form-group">
-                <label>Título</label>
-
-                <input
-                    id="modalTaskTitle"
-                    value="${escapeHTML(task?.title || "")}"
-                    placeholder="Ex: Entrar em contato com cliente"
-                    required
-                >
-            </div>
-
-            <div class="form-group">
-                <label>Descrição</label>
-
-                <textarea
-                    id="modalTaskDescription"
-                    rows="4"
-                    placeholder="Descrição da tarefa..."
-                >${escapeHTML(task?.description || "")}</textarea>
-            </div>
-
+        content = `
             <div class="form-grid">
 
+                <div class="form-group full">
+                    <label>Título</label>
+
+                    <input
+                        id="modalTaskTitle"
+                        value="${escapeHTML(
+                            task?.title || ""
+                        )}"
+                        required
+                    >
+                </div>
+
+                <div class="form-group full">
+                    <label>Descrição</label>
+
+                    <textarea id="modalTaskDescription">${escapeHTML(
+                        task?.description || ""
+                    )}</textarea>
+                </div>
+
                 <div class="form-group">
-                    <label>Prazo</label>
+                    <label>Data de entrega</label>
 
                     <input
                         id="modalTaskDueDate"
@@ -938,249 +1491,198 @@ function openModal(type, id = null) {
                     <select id="modalTaskPriority">
 
                         <option value="low"
-                            ${task?.priority === "low" ? "selected" : ""}
-                        >
+                            ${
+                                task?.priority ===
+                                "low"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Baixa
                         </option>
 
                         <option value="medium"
-                            ${task?.priority === "medium" ? "selected" : ""}
-                        >
+                            ${
+                                !task ||
+                                task.priority ===
+                                "medium"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Média
                         </option>
 
                         <option value="high"
-                            ${task?.priority === "high" ? "selected" : ""}
-                        >
+                            ${
+                                task?.priority ===
+                                "high"
+                                    ? "selected"
+                                    : ""
+                            }>
                             Alta
                         </option>
 
                     </select>
                 </div>
 
-            </div>
+                <div class="form-group full">
+                    <label>Responsável</label>
 
-            <div class="form-group">
-                <label>Responsável</label>
+                    <select id="modalTaskOwner">
 
-                <select id="modalTaskOwner">
+                        ${USERS
+                            .map(
+                                user => `
+                                <option
+                                    value="${escapeHTML(user.nome)}"
+                                    ${
+                                        (
+                                            task?.owner ||
+                                            "Arthur Rodrigues"
+                                        ) ===
+                                        user.nome
+                                            ? "selected"
+                                            : ""
+                                    }
+                                >
+                                    ${escapeHTML(user.nome)}
+                                </option>
+                            `
+                            )
+                            .join("")}
 
-                    <option value="Administrador"
-                        ${task?.owner === "Administrador" ? "selected" : ""}
-                    >
-                        Administrador
-                    </option>
+                    </select>
+                </div>
 
-                    <option value="Arthur Rodrigues"
-                        ${task?.owner === "Arthur Rodrigues" ? "selected" : ""}
-                    >
-                        Arthur Rodrigues
-                    </option>
-
-                    <option value="Pietro de Jesus"
-                        ${task?.owner === "Pietro de Jesus" ? "selected" : ""}
-                    >
-                        Pietro de Jesus
-                    </option>
-
-                </select>
             </div>
         `;
     }
-
-
-    /* =========================
-       META
-       ========================= */
 
     if (type === "goal") {
 
-        eyebrow.textContent = "Configuração";
-        title.textContent = "Meta geral";
-        submit.textContent = "Salvar meta";
+        eyebrow.textContent =
+            "Meta geral";
 
-        html = `
-            <div class="form-group">
-                <label>Meta mensal</label>
+        title.textContent =
+            "Definir meta";
 
-                <input
-                    id="modalGoalValue"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value="${Number(data.goals.general || 0)}"
-                    placeholder="0,00"
-                >
+        content = `
+            <div class="form-grid">
+
+                <div class="form-group full">
+
+                    <label>
+                        Meta mensal
+                    </label>
+
+                    <input
+                        id="modalGeneralGoal"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value="${data.goals.general || 0}"
+                        required
+                    >
+
+                </div>
+
             </div>
         `;
     }
 
-    body.innerHTML = html;
+    body.innerHTML = content;
 
     overlay.classList.add("active");
-    document.body.classList.add("modal-open");
 }
+
+/* =========================================================
+   FECHAR MODAL
+   ========================================================= */
 
 function closeModal() {
 
-    const overlay = document.getElementById("modalOverlay");
+    const overlay =
+        document.getElementById(
+            "modalOverlay"
+        );
 
     if (overlay) {
-        overlay.classList.remove("active");
+        overlay.classList.remove(
+            "active"
+        );
     }
 
-    document.body.classList.remove("modal-open");
-
-    currentModalType = null;
-    currentModalId = null;
+    currentModal = null;
+    editingId = null;
 }
 
-
 /* =========================================================
-   SALVAR MODAL
+   SUBMIT MODAL
    ========================================================= */
 
 async function submitModal() {
 
     if (!isAdmin) {
         showToast(
-            "Modo administrador necessário.",
+            "Apenas o administrador pode editar.",
             "error"
         );
 
         return;
     }
 
-    /* =========================
-       VENDA
-       ========================= */
+    if (!currentModal) return;
 
-    if (currentModalType === "sale") {
+    if (currentModal === "sale") {
 
         const clientId =
-            document.getElementById("modalSaleClient")?.value;
+            document.getElementById(
+                "modalClient"
+            )?.value;
 
         const value =
             Number(
-                document.getElementById("modalSaleValue")?.value
+                document.getElementById(
+                    "modalSaleValue"
+                )?.value
             );
 
         const date =
-            document.getElementById("modalSaleDate")?.value;
+            document.getElementById(
+                "modalSaleDate"
+            )?.value;
 
         const responsible =
-            document.getElementById("modalSaleResponsible")?.value;
+            document.getElementById(
+                "modalSaleResponsible"
+            )?.value;
 
         const status =
-            document.getElementById("modalSaleStatus")?.value;
+            document.getElementById(
+                "modalSaleStatus"
+            )?.value;
 
         const payment =
-            document.getElementById("modalSalePayment")?.value;
+            document.getElementById(
+                "modalSalePayment"
+            )?.value;
 
         const notes =
-            document.getElementById("modalSaleNotes")?.value;
+            document.getElementById(
+                "modalSaleNotes"
+            )?.value || "";
 
         if (!clientId) {
-            showToast("Selecione um cliente.", "error");
+            showToast(
+                "Selecione um cliente.",
+                "error"
+            );
+
             return;
         }
 
         if (!value || value <= 0) {
-            showToast("Digite um valor válido.", "error");
-            return;
-        }
-
-        const existing =
-            data.sales.find(item => item.id === currentModalId);
-
-        const sale = normalizeSale({
-            ...(existing || {}),
-            id: existing?.id || uid("sale"),
-            clientId,
-            value,
-            date,
-            responsible,
-            status,
-            payment,
-            notes,
-            createdAt:
-                existing?.createdAt ||
-                new Date().toISOString()
-        });
-
-        if (existing) {
-
-            const index =
-                data.sales.findIndex(
-                    item => item.id === currentModalId
-                );
-
-            data.sales[index] = sale;
-
-            addActivity(
-                `Venda de ${currency(value)} atualizada.`
-            );
-
-        } else {
-
-            data.sales.unshift(sale);
-
-            const client = getClient(clientId);
-
-            addActivity(
-                `Nova venda de ${currency(value)} para ${
-                    client?.name ||
-                    client?.company ||
-                    "cliente"
-                }.`
-            );
-        }
-
-        closeModal();
-
-        renderAll();
-
-        await saveData(true);
-
-        return;
-    }
-
-
-    /* =========================
-       CLIENTE
-       ========================= */
-
-    if (currentModalType === "client") {
-
-        const name =
-            document.getElementById("modalClientName")?.value.trim();
-
-        const company =
-            document.getElementById("modalClientCompany")?.value.trim();
-
-        const phone =
-            document.getElementById("modalClientPhone")?.value.trim();
-
-        const email =
-            document.getElementById("modalClientEmail")?.value.trim();
-
-        const status =
-            document.getElementById("modalClientStatus")?.value;
-
-        const responsible =
-            document.getElementById("modalClientResponsible")?.value;
-
-        const potential =
-            Number(
-                document.getElementById("modalClientPotential")?.value || 0
-            );
-
-        const notes =
-            document.getElementById("modalClientNotes")?.value;
-
-        if (!name && !company) {
             showToast(
-                "Informe o nome ou a empresa.",
+                "Informe um valor válido.",
                 "error"
             );
 
@@ -1188,11 +1690,135 @@ async function submitModal() {
         }
 
         const existing =
-            getClient(currentModalId);
+            data.sales.find(
+                sale =>
+                    sale.id === editingId
+            );
 
-        const client = normalizeClient({
-            ...(existing || {}),
-            id: existing?.id || uid("client"),
+        const sale = {
+            id:
+                editingId ||
+                uid("sale"),
+
+            clientId,
+            value,
+            date:
+                date || today(),
+            responsible,
+            status,
+            payment,
+            notes,
+
+            createdAt:
+                existing?.createdAt ||
+                new Date().toISOString()
+        };
+
+        if (editingId) {
+
+            const index =
+                data.sales.findIndex(
+                    sale =>
+                        sale.id ===
+                        editingId
+                );
+
+            if (index !== -1) {
+                data.sales[index] =
+                    sale;
+            }
+
+            addActivity(
+                "sale",
+                "Venda atualizada",
+                currency(value)
+            );
+
+        } else {
+
+            data.sales.unshift(
+                sale
+            );
+
+            addActivity(
+                "sale",
+                "Nova venda registrada",
+                currency(value)
+            );
+
+            addNotification(
+                "Nova venda",
+                `Venda de ${currency(value)} registrada.`,
+                "success"
+            );
+        }
+    }
+
+    if (currentModal === "client") {
+
+        const name =
+            document.getElementById(
+                "modalClientName"
+            )?.value.trim();
+
+        const company =
+            document.getElementById(
+                "modalClientCompany"
+            )?.value.trim();
+
+        const phone =
+            document.getElementById(
+                "modalClientPhone"
+            )?.value.trim();
+
+        const email =
+            document.getElementById(
+                "modalClientEmail"
+            )?.value.trim();
+
+        const status =
+            document.getElementById(
+                "modalClientStatus"
+            )?.value;
+
+        const responsible =
+            document.getElementById(
+                "modalClientResponsible"
+            )?.value;
+
+        const potential =
+            Number(
+                document.getElementById(
+                    "modalClientPotential"
+                )?.value
+            ) || 0;
+
+        const notes =
+            document.getElementById(
+                "modalClientNotes"
+            )?.value || "";
+
+        if (!name) {
+            showToast(
+                "Informe o nome do cliente.",
+                "error"
+            );
+
+            return;
+        }
+
+        const existing =
+            data.clients.find(
+                client =>
+                    client.id ===
+                    editingId
+            );
+
+        const client = {
+            id:
+                editingId ||
+                uid("client"),
+
             name,
             company,
             phone,
@@ -1201,67 +1827,82 @@ async function submitModal() {
             responsible,
             potential,
             notes,
+
             createdAt:
                 existing?.createdAt ||
-                today()
-        });
+                new Date().toISOString()
+        };
 
-        if (existing) {
+        if (editingId) {
 
             const index =
                 data.clients.findIndex(
-                    item => item.id === currentModalId
+                    client =>
+                        client.id ===
+                        editingId
                 );
 
-            data.clients[index] = client;
+            if (index !== -1) {
+                data.clients[index] =
+                    client;
+            }
 
             addActivity(
-                `Cliente ${name || company} atualizado.`
+                "client",
+                "Cliente atualizado",
+                name
             );
 
         } else {
 
-            data.clients.unshift(client);
+            data.clients.unshift(
+                client
+            );
 
             addActivity(
-                `Novo cliente ${name || company} cadastrado.`
+                "client",
+                "Novo cliente cadastrado",
+                name
+            );
+
+            addNotification(
+                "Novo cliente",
+                `${name} foi cadastrado.`,
+                "info"
             );
         }
-
-        closeModal();
-
-        renderAll();
-
-        await saveData(true);
-
-        return;
     }
 
-
-    /* =========================
-       TAREFA
-       ========================= */
-
-    if (currentModalType === "task") {
+    if (currentModal === "task") {
 
         const title =
-            document.getElementById("modalTaskTitle")?.value.trim();
+            document.getElementById(
+                "modalTaskTitle"
+            )?.value.trim();
 
         const description =
-            document.getElementById("modalTaskDescription")?.value;
+            document.getElementById(
+                "modalTaskDescription"
+            )?.value.trim();
 
         const dueDate =
-            document.getElementById("modalTaskDueDate")?.value;
+            document.getElementById(
+                "modalTaskDueDate"
+            )?.value;
 
         const priority =
-            document.getElementById("modalTaskPriority")?.value;
+            document.getElementById(
+                "modalTaskPriority"
+            )?.value;
 
         const owner =
-            document.getElementById("modalTaskOwner")?.value;
+            document.getElementById(
+                "modalTaskOwner"
+            )?.value;
 
         if (!title) {
             showToast(
-                "Digite o título da tarefa.",
+                "Informe o título da tarefa.",
                 "error"
             );
 
@@ -1269,81 +1910,108 @@ async function submitModal() {
         }
 
         const existing =
-            data.tasks.find(item => item.id === currentModalId);
+            data.tasks.find(
+                task =>
+                    task.id ===
+                    editingId
+            );
 
-        const task = normalizeTask({
-            ...(existing || {}),
-            id: existing?.id || uid("task"),
+        const task = {
+            id:
+                editingId ||
+                uid("task"),
+
             title,
             description,
-            dueDate,
+            dueDate:
+                dueDate || today(),
+
             priority,
             owner,
-            completed: existing?.completed || false,
+
+            completed:
+                existing?.completed ||
+                false,
+
             createdAt:
                 existing?.createdAt ||
                 new Date().toISOString()
-        });
+        };
 
-        if (existing) {
+        if (editingId) {
 
             const index =
                 data.tasks.findIndex(
-                    item => item.id === currentModalId
+                    task =>
+                        task.id ===
+                        editingId
                 );
 
-            data.tasks[index] = task;
+            if (index !== -1) {
+                data.tasks[index] =
+                    task;
+            }
 
             addActivity(
-                `Tarefa "${title}" atualizada.`
+                "task",
+                "Tarefa atualizada",
+                title
             );
 
         } else {
 
-            data.tasks.unshift(task);
+            data.tasks.unshift(
+                task
+            );
 
             addActivity(
-                `Nova tarefa "${title}" criada.`
+                "task",
+                "Nova tarefa criada",
+                title
+            );
+
+            addNotification(
+                "Nova tarefa",
+                title,
+                "info"
             );
         }
-
-        closeModal();
-
-        renderAll();
-
-        await saveData(true);
-
-        return;
     }
 
-
-    /* =========================
-       META
-       ========================= */
-
-    if (currentModalType === "goal") {
+    if (currentModal === "goal") {
 
         const value =
             Number(
-                document.getElementById("modalGoalValue")?.value || 0
+                document.getElementById(
+                    "modalGeneralGoal"
+                )?.value
             );
 
-        data.goals.general = value;
+        if (value < 0) {
+            showToast(
+                "Informe uma meta válida.",
+                "error"
+            );
+
+            return;
+        }
+
+        data.goals.general =
+            value;
 
         addActivity(
-            `Meta geral definida em ${currency(value)}.`
+            "goal",
+            "Meta geral atualizada",
+            currency(value)
         );
-
-        closeModal();
-
-        renderAll();
-
-        await saveData(true);
-
-        return;
     }
-}
 
+    closeModal();
+
+    renderAll();
+
+    await saveData();
+}
 
 /* =========================================================
    EXCLUIR VENDA
@@ -1354,11 +2022,17 @@ async function deleteSale(id) {
     if (!isAdmin) return;
 
     const sale =
-        data.sales.find(item => item.id === id);
+        data.sales.find(
+            item => item.id === id
+        );
 
     if (!sale) return;
 
-    if (!confirm("Deseja realmente excluir esta venda?")) {
+    if (
+        !confirm(
+            "Deseja excluir esta venda?"
+        )
+    ) {
         return;
     }
 
@@ -1368,14 +2042,15 @@ async function deleteSale(id) {
         );
 
     addActivity(
-        `Venda de ${currency(sale.value)} excluída.`
+        "sale",
+        "Venda excluída",
+        currency(sale.value)
     );
 
     renderAll();
 
-    await saveData(true);
+    await saveData();
 }
-
 
 /* =========================================================
    EXCLUIR CLIENTE
@@ -1385,13 +2060,14 @@ async function deleteClient(id) {
 
     if (!isAdmin) return;
 
-    const client = getClient(id);
+    const client =
+        getClient(id);
 
     if (!client) return;
 
     if (
         !confirm(
-            `Excluir o cliente "${client.name || client.company}"?`
+            `Deseja excluir ${client.name}?`
         )
     ) {
         return;
@@ -1403,14 +2079,15 @@ async function deleteClient(id) {
         );
 
     addActivity(
-        `Cliente ${client.name || client.company} excluído.`
+        "client",
+        "Cliente excluído",
+        client.name
     );
 
     renderAll();
 
-    await saveData(true);
+    await saveData();
 }
-
 
 /* =========================================================
    EXCLUIR TAREFA
@@ -1421,11 +2098,17 @@ async function deleteTask(id) {
     if (!isAdmin) return;
 
     const task =
-        data.tasks.find(item => item.id === id);
+        data.tasks.find(
+            item => item.id === id
+        );
 
     if (!task) return;
 
-    if (!confirm(`Excluir a tarefa "${task.title}"?`)) {
+    if (
+        !confirm(
+            `Excluir a tarefa "${task.title}"?`
+        )
+    ) {
         return;
     }
 
@@ -1435,14 +2118,15 @@ async function deleteTask(id) {
         );
 
     addActivity(
-        `Tarefa "${task.title}" excluída.`
+        "task",
+        "Tarefa excluída",
+        task.title
     );
 
     renderAll();
 
-    await saveData(true);
+    await saveData();
 }
-
 
 /* =========================================================
    CONCLUIR TAREFA
@@ -1452,7 +2136,7 @@ async function toggleTask(id) {
 
     if (!isAdmin) {
         showToast(
-            "Somente o administrador pode alterar tarefas.",
+            "Apenas o administrador pode alterar tarefas.",
             "error"
         );
 
@@ -1460,568 +2144,176 @@ async function toggleTask(id) {
     }
 
     const task =
-        data.tasks.find(item => item.id === id);
+        data.tasks.find(
+            item => item.id === id
+        );
 
     if (!task) return;
 
-    task.completed = !task.completed;
+    task.completed =
+        !task.completed;
 
     addActivity(
+        "task",
         task.completed
-            ? `Tarefa "${task.title}" concluída.`
-            : `Tarefa "${task.title}" reaberta.`
+            ? "Tarefa concluída"
+            : "Tarefa reaberta",
+        task.title
     );
 
     renderAll();
 
-    await saveData(true);
+    await saveData();
 }
-
 
 /* =========================================================
-   STATUS / LABELS
+   WHATSAPP
    ========================================================= */
 
-function saleStatusLabel(status) {
+function openWhatsApp(phone) {
 
-    const labels = {
-        pending: "Pendente",
-        received: "Recebida",
-        cancelled: "Cancelada"
-    };
-
-    return labels[status] || status;
-}
-
-function clientStatusLabel(status) {
-
-    const labels = {
-        lead: "Lead",
-        negotiation: "Negociação",
-        customer: "Cliente"
-    };
-
-    return labels[status] || status;
-}
-
-function priorityLabel(priority) {
-
-    const labels = {
-        low: "Baixa",
-        medium: "Média",
-        high: "Alta"
-    };
-
-    return labels[priority] || priority;
-}
-
-
-/* =========================================================
-   RENDER — VENDAS
-   ========================================================= */
-
-function renderSales() {
-
-    const list =
-        document.getElementById("salesList");
-
-    if (!list) return;
-
-    const search =
-        document.getElementById("salesSearch")?.value
-            .toLowerCase()
-            .trim() || "";
-
-    const statusFilter =
-        document.getElementById("salesStatusFilter")?.value || "all";
-
-    const responsibleFilter =
-        document.getElementById("salesResponsibleFilter")?.value || "all";
-
-    let sales = [...data.sales];
-
-    sales = sales.filter(sale => {
-
-        const client = getClient(sale.clientId);
-
-        const clientName =
-            client?.name ||
-            client?.company ||
-            "";
-
-        const matchesSearch =
-            !search ||
-            clientName.toLowerCase().includes(search) ||
-            sale.responsible.toLowerCase().includes(search);
-
-        const matchesStatus =
-            statusFilter === "all" ||
-            sale.status === statusFilter;
-
-        const matchesResponsible =
-            responsibleFilter === "all" ||
-            sale.responsible === responsibleFilter;
-
-        return (
-            matchesSearch &&
-            matchesStatus &&
-            matchesResponsible
+    if (!phone) {
+        showToast(
+            "Este cliente não possui telefone.",
+            "error"
         );
-    });
-
-    if (!sales.length) {
-
-        list.innerHTML = `
-            <div class="empty-state">
-                <strong>Nenhuma venda encontrada</strong>
-                <span>As vendas cadastradas aparecerão aqui.</span>
-            </div>
-        `;
 
         return;
     }
 
-    list.innerHTML = sales.map(sale => {
+    const numbers =
+        String(phone)
+            .replace(/\D/g, "");
 
-        const client =
-            getClient(sale.clientId);
-
-        const clientName =
-            client?.name ||
-            client?.company ||
-            "Cliente";
-
-        return `
-            <div class="data-row">
-
-                <div class="row-main">
-                    <strong>${escapeHTML(clientName)}</strong>
-
-                    <span>
-                        ${formatDate(sale.date)}
-                        · ${escapeHTML(sale.responsible)}
-                    </span>
-                </div>
-
-                <div class="row-value">
-                    ${currency(sale.value)}
-                </div>
-
-                <div class="row-status">
-                    <span class="status-badge ${escapeHTML(sale.status)}">
-                        ${escapeHTML(
-                            saleStatusLabel(sale.status)
-                        )}
-                    </span>
-                </div>
-
-                ${
-                    isAdmin
-                        ? `
-                            <div class="row-actions">
-
-                                <button
-                                    type="button"
-                                    data-action="edit-sale"
-                                    data-id="${sale.id}"
-                                >
-                                    Editar
-                                </button>
-
-                                <button
-                                    type="button"
-                                    data-action="delete-sale"
-                                    data-id="${sale.id}"
-                                >
-                                    Excluir
-                                </button>
-
-                            </div>
-                        `
-                        : ""
-                }
-
-            </div>
-        `;
-    }).join("");
-}
-
-
-/* =========================================================
-   RENDER — CLIENTES
-   ========================================================= */
-
-function renderClients() {
-
-    const list =
-        document.getElementById("clientList");
-
-    if (!list) return;
-
-    const search =
-        document.getElementById("clientSearch")?.value
-            .toLowerCase()
-            .trim() || "";
-
-    const statusFilter =
-        document.getElementById("clientStatusFilter")?.value || "all";
-
-    let clients =
-        [...data.clients];
-
-    clients = clients.filter(client => {
-
-        const matchesSearch =
-            !search ||
-            client.name.toLowerCase().includes(search) ||
-            client.company.toLowerCase().includes(search) ||
-            client.phone.toLowerCase().includes(search);
-
-        const matchesStatus =
-            statusFilter === "all" ||
-            client.status === statusFilter;
-
-        return matchesSearch && matchesStatus;
-    });
-
-    if (!clients.length) {
-
-        list.innerHTML = `
-            <div class="empty-state">
-                <strong>Nenhum cliente encontrado</strong>
-                <span>Os clientes cadastrados aparecerão aqui.</span>
-            </div>
-        `;
+    if (!numbers) {
+        showToast(
+            "Telefone inválido.",
+            "error"
+        );
 
         return;
     }
 
-    list.innerHTML = clients.map(client => {
+    const normalized =
+        numbers.startsWith("55")
+            ? numbers
+            : `55${numbers}`;
 
-        const displayName =
-            client.name ||
-            client.company ||
-            "Cliente";
-
-        return `
-            <div class="data-row">
-
-                <div class="row-main">
-
-                    <div class="avatar-small">
-                        ${escapeHTML(
-                            initials(displayName)
-                        )}
-                    </div>
-
-                    <div>
-                        <strong>
-                            ${escapeHTML(displayName)}
-                        </strong>
-
-                        <span>
-                            ${escapeHTML(
-                                client.company || "Sem empresa"
-                            )}
-                        </span>
-                    </div>
-
-                </div>
-
-                <div>
-                    <span>
-                        ${escapeHTML(client.responsible)}
-                    </span>
-                </div>
-
-                <div>
-                    <span class="status-badge ${escapeHTML(client.status)}">
-                        ${escapeHTML(
-                            clientStatusLabel(client.status)
-                        )}
-                    </span>
-                </div>
-
-                <div>
-                    ${
-                        client.potential
-                            ? currency(client.potential)
-                            : "—"
-                    }
-                </div>
-
-                <div class="row-actions">
-
-                    ${
-                        client.phone
-                            ? `
-                                <button
-                                    type="button"
-                                    data-action="whatsapp"
-                                    data-phone="${escapeHTML(client.phone)}"
-                                >
-                                    WhatsApp
-                                </button>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        isAdmin
-                            ? `
-                                <button
-                                    type="button"
-                                    data-action="edit-client"
-                                    data-id="${client.id}"
-                                >
-                                    Editar
-                                </button>
-
-                                <button
-                                    type="button"
-                                    data-action="delete-client"
-                                    data-id="${client.id}"
-                                >
-                                    Excluir
-                                </button>
-                            `
-                            : ""
-                    }
-
-                </div>
-
-            </div>
-        `;
-    }).join("");
+    window.open(
+        `https://wa.me/${normalized}`,
+        "_blank"
+    );
 }
 
-
 /* =========================================================
-   RENDER — TAREFAS
-   ========================================================= */
-
-function renderTasks() {
-
-    const list =
-        document.getElementById("fullTaskList");
-
-    if (!list) return;
-
-    const filter =
-        document.querySelector(
-            "[data-task-filter].active"
-        )?.dataset.taskFilter || "all";
-
-    let tasks =
-        [...data.tasks];
-
-    if (filter === "pending") {
-        tasks = tasks.filter(
-            task => !task.completed
-        );
-    }
-
-    if (filter === "completed") {
-        tasks = tasks.filter(
-            task => task.completed
-        );
-    }
-
-    if (filter === "overdue") {
-        tasks = tasks.filter(task =>
-            !task.completed &&
-            task.dueDate &&
-            task.dueDate < today()
-        );
-    }
-
-    tasks.sort((a, b) => {
-
-        if (a.completed !== b.completed) {
-            return a.completed ? 1 : -1;
-        }
-
-        return String(a.dueDate)
-            .localeCompare(String(b.dueDate));
-    });
-
-    if (!tasks.length) {
-
-        list.innerHTML = `
-            <div class="empty-state">
-                <strong>Nenhuma tarefa encontrada</strong>
-                <span>As tarefas compartilhadas aparecerão aqui.</span>
-            </div>
-        `;
-
-        return;
-    }
-
-    list.innerHTML = tasks.map(task => {
-
-        const overdue =
-            !task.completed &&
-            task.dueDate &&
-            task.dueDate < today();
-
-        return `
-            <div class="task-row ${task.completed ? "completed" : ""}">
-
-                <button
-                    type="button"
-                    class="task-check"
-                    data-action="toggle-task"
-                    data-id="${task.id}"
-                    ${!isAdmin ? "disabled" : ""}
-                    aria-label="Concluir tarefa"
-                >
-                    ${task.completed ? "✓" : ""}
-                </button>
-
-                <div class="task-content">
-
-                    <strong>
-                        ${escapeHTML(task.title)}
-                    </strong>
-
-                    ${
-                        task.description
-                            ? `
-                                <span>
-                                    ${escapeHTML(
-                                        task.description
-                                    )}
-                                </span>
-                            `
-                            : ""
-                    }
-
-                    <div class="task-meta">
-
-                        <span>
-                            ${formatDate(task.dueDate)}
-                        </span>
-
-                        <span>
-                            ${escapeHTML(task.owner)}
-                        </span>
-
-                        <span class="priority-${escapeHTML(task.priority)}">
-                            ${escapeHTML(
-                                priorityLabel(task.priority)
-                            )}
-                        </span>
-
-                        ${
-                            overdue
-                                ? `
-                                    <span class="overdue">
-                                        Atrasada
-                                    </span>
-                                `
-                                : ""
-                        }
-
-                    </div>
-
-                </div>
-
-                ${
-                    isAdmin
-                        ? `
-                            <div class="row-actions">
-
-                                <button
-                                    type="button"
-                                    data-action="edit-task"
-                                    data-id="${task.id}"
-                                >
-                                    Editar
-                                </button>
-
-                                <button
-                                    type="button"
-                                    data-action="delete-task"
-                                    data-id="${task.id}"
-                                >
-                                    Excluir
-                                </button>
-
-                            </div>
-                        `
-                        : ""
-                }
-
-            </div>
-        `;
-    }).join("");
-}
-
-
-/* =========================================================
-   RENDER — DASHBOARD
+   DASHBOARD
    ========================================================= */
 
 function renderDashboard() {
 
-    const revenue =
+    const totalRevenue =
         data.sales
-            .filter(sale => sale.status !== "cancelled")
+            .filter(
+                sale =>
+                    sale.status !==
+                    "cancelled"
+            )
             .reduce(
                 (sum, sale) =>
-                    sum + Number(sale.value || 0),
+                    sum +
+                    Number(sale.value || 0),
                 0
             );
 
-    const received =
-        data.sales
-            .filter(sale => sale.status === "received")
-            .reduce(
-                (sum, sale) =>
-                    sum + Number(sale.value || 0),
-                0
-            );
+    const salesCount =
+        data.sales.length;
 
-    const activeTasks =
-        data.tasks.filter(
-            task => !task.completed
-        ).length;
+    const clientsCount =
+        data.clients.length;
 
-    const completedTasks =
+    const pendingTasks =
         data.tasks.filter(
-            task => task.completed
+            task =>
+                !task.completed
         ).length;
 
     const goal =
-        Number(data.goals.general || 0);
+        Number(
+            data.goals.general
+        ) || 0;
 
     const goalPercent =
         goal > 0
             ? Math.min(
-                100,
-                Math.round(
-                    (received / goal) * 100
-                )
-            )
+                  100,
+                  Math.round(
+                      (totalRevenue /
+                          goal) *
+                          100
+                  )
+              )
             : 0;
 
-
-    const setText = (id, value) => {
-
-        const element =
-            document.getElementById(id);
-
-        if (element) {
-            element.textContent = value;
-        }
-    };
-
+    setText(
+        "dashboardRevenue",
+        currency(totalRevenue)
+    );
 
     setText(
-        "welcomeName",
-        isAdmin
-            ? "Administrador"
-            : "NEXA"
+        "dashboardSales",
+        salesCount
+    );
+
+    setText(
+        "dashboardClients",
+        clientsCount
+    );
+
+    setText(
+        "dashboardTasks",
+        pendingTasks
+    );
+
+    setText(
+        "dashboardRevenueLarge",
+        currency(totalRevenue)
+    );
+
+    setText(
+        "dashboardGoalPercent",
+        `${goalPercent}%`
+    );
+
+    const bar =
+        document.getElementById(
+            "dashboardGoalBar"
+        );
+
+    if (bar) {
+        bar.style.width =
+            `${goalPercent}%`;
+    }
+
+    setText(
+        "dashboardGoalText",
+        goal > 0
+            ? `${currency(totalRevenue)} de ${currency(goal)}`
+            : "Nenhuma meta definida"
+    );
+
+    setText(
+        "dashboardRevenueInfo",
+        `${data.sales.length} venda(s)`
+    );
+
+    setText(
+        "dashboardSalesInfo",
+        `${salesCount} registrada(s)`
+    );
+
+    setText(
+        "dashboardTasksInfo",
+        `${pendingTasks} pendente(s)`
     );
 
     setText(
@@ -2031,333 +2323,393 @@ function renderDashboard() {
             {
                 weekday: "long",
                 day: "numeric",
-                month: "long"
+                month: "long",
+                year: "numeric"
             }
         )
     );
 
-    setText(
-        "dashboardRevenue",
-        currency(revenue)
-    );
+    renderDashboardSales();
+}
 
-    setText(
-        "dashboardSales",
-        data.sales.length
-    );
+/* =========================================================
+   VENDAS DO DASHBOARD
+   ========================================================= */
 
-    setText(
-        "dashboardClients",
-        data.clients.length
-    );
+function renderDashboardSales() {
 
-    setText(
-        "dashboardTasks",
-        activeTasks
-    );
+    const container =
+        document.getElementById(
+            "dashboardSalesList"
+        );
 
-    setText(
-        "dashboardRevenueInfo",
-        `${currency(received)} recebidos`
-    );
+    if (!container) return;
 
-    setText(
-        "dashboardSalesInfo",
-        `${data.sales.length} vendas cadastradas`
-    );
+    const sales =
+        [...data.sales]
+            .sort(
+                (a, b) =>
+                    new Date(b.date) -
+                    new Date(a.date)
+            )
+            .slice(0, 5);
 
-    setText(
-        "dashboardTasksInfo",
-        `${completedTasks} concluídas`
-    );
+    if (!sales.length) {
 
-    setText(
-        "dashboardRevenueLarge",
-        currency(received)
-    );
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>Nenhuma venda registrada.</p>
+            </div>
+        `;
 
-    setText(
-        "dashboardGoalPercent",
-        `${goalPercent}%`
-    );
-
-    setText(
-        "dashboardGoalText",
-        goal > 0
-            ? `${currency(received)} de ${currency(goal)}`
-            : "Nenhuma meta definida"
-    );
-
-    const bar =
-        document.getElementById("dashboardGoalBar");
-
-    if (bar) {
-        bar.style.width =
-            `${goalPercent}%`;
+        return;
     }
 
-
-    /* =========================
-       VENDAS RECENTES
-       ========================= */
-
-    const salesList =
-        document.getElementById("dashboardSalesList");
-
-    if (salesList) {
-
-        const recent =
-            [...data.sales]
-                .sort(
-                    (a, b) =>
-                        String(b.date)
-                            .localeCompare(
-                                String(a.date)
-                            )
-                )
-                .slice(0, 5);
-
-        if (!recent.length) {
-
-            salesList.innerHTML = `
-                <div class="empty-state">
-                    <strong>Nenhuma venda ainda</strong>
-                    <span>As vendas aparecerão aqui.</span>
-                </div>
-            `;
-
-        } else {
-
-            salesList.innerHTML =
-                recent.map(sale => {
+    container.innerHTML =
+        sales
+            .map(
+                sale => {
 
                     const client =
-                        getClient(sale.clientId);
+                        getClient(
+                            sale.clientId
+                        );
 
                     return `
-                        <div class="mini-row">
+                        <div class="list-item">
 
-                            <div>
+                            <div class="list-item-main">
+
                                 <strong>
                                     ${escapeHTML(
                                         client?.name ||
-                                        client?.company ||
                                         "Cliente"
                                     )}
                                 </strong>
 
                                 <span>
-                                    ${formatDate(sale.date)}
+                                    ${formatDate(
+                                        sale.date
+                                    )}
                                 </span>
+
                             </div>
 
-                            <strong>
-                                ${currency(sale.value)}
-                            </strong>
+                            <div class="list-item-value">
+                                ${currency(
+                                    sale.value
+                                )}
+                            </div>
 
                         </div>
                     `;
+                }
+            )
+            .join("");
+}
 
-                }).join("");
-        }
+/* =========================================================
+   ESTATÍSTICAS DE VENDAS
+   ========================================================= */
+
+function renderSalesStats() {
+
+    const validSales =
+        data.sales.filter(
+            sale =>
+                sale.status !==
+                "cancelled"
+        );
+
+    const revenue =
+        validSales.reduce(
+            (sum, sale) =>
+                sum +
+                Number(sale.value || 0),
+            0
+        );
+
+    const received =
+        validSales
+            .filter(
+                sale =>
+                    sale.status ===
+                    "paid"
+            )
+            .reduce(
+                (sum, sale) =>
+                    sum +
+                    Number(sale.value || 0),
+                0
+            );
+
+    const average =
+        validSales.length
+            ? revenue /
+              validSales.length
+            : 0;
+
+    setText(
+        "salesRevenue",
+        currency(revenue)
+    );
+
+    setText(
+        "salesCount",
+        data.sales.length
+    );
+
+    setText(
+        "salesReceived",
+        currency(received)
+    );
+
+    setText(
+        "salesAverage",
+        currency(average)
+    );
+
+    renderSalesResponsibleFilter();
+}
+
+/* =========================================================
+   FILTRO RESPONSÁVEL
+   ========================================================= */
+
+function renderSalesResponsibleFilter() {
+
+    const select =
+        document.getElementById(
+            "salesResponsibleFilter"
+        );
+
+    if (!select) return;
+
+    const current =
+        select.value;
+
+    const names = [
+        ...new Set(
+            data.sales
+                .map(
+                    sale =>
+                        sale.responsible
+                )
+                .filter(Boolean)
+        )
+    ];
+
+    select.innerHTML = `
+        <option value="">
+            Todos os responsáveis
+        </option>
+
+        ${names
+            .map(
+                name => `
+                <option value="${escapeHTML(
+                    name
+                )}">
+                    ${escapeHTML(name)}
+                </option>
+            `
+            )
+            .join("")}
+    `;
+
+    if (
+        names.includes(current)
+    ) {
+        select.value =
+            current;
     }
 }
 
-
 /* =========================================================
-   RANKING
+   RENDER VENDAS
    ========================================================= */
 
-function renderRanking() {
+function renderSales() {
 
-    const element =
-        document.getElementById("rankingList");
+    const container =
+        document.getElementById(
+            "salesList"
+        );
 
-    if (!element) return;
+    if (!container) return;
 
-    const ranking = {};
+    const search =
+        (
+            document.getElementById(
+                "salesSearch"
+            )?.value || ""
+        )
+            .toLowerCase()
+            .trim();
 
-    data.sales.forEach(sale => {
+    const status =
+        document.getElementById(
+            "salesStatusFilter"
+        )?.value || "";
 
-        if (sale.status === "cancelled") return;
+    const responsible =
+        document.getElementById(
+            "salesResponsibleFilter"
+        )?.value || "";
 
-        const name =
-            sale.responsible ||
-            "Administrador";
+    let sales =
+        [...data.sales];
 
-        ranking[name] =
-            (ranking[name] || 0) +
-            Number(sale.value || 0);
-    });
+    if (search) {
 
-    const items =
-        Object.entries(ranking)
-            .sort((a, b) => b[1] - a[1]);
+        sales =
+            sales.filter(
+                sale => {
 
-    if (!items.length) {
+                    const client =
+                        getClient(
+                            sale.clientId
+                        );
 
-        element.innerHTML = `
+                    const text =
+                        [
+                            client?.name,
+                            client?.company,
+                            sale.responsible,
+                            sale.notes
+                        ]
+                            .join(" ")
+                            .toLowerCase();
+
+                    return text.includes(
+                        search
+                    );
+                }
+            );
+    }
+
+    if (status) {
+
+        sales =
+            sales.filter(
+                sale =>
+                    sale.status ===
+                    status
+            );
+    }
+
+    if (responsible) {
+
+        sales =
+            sales.filter(
+                sale =>
+                    sale.responsible ===
+                    responsible
+            );
+    }
+
+    sales.sort(
+        (a, b) =>
+            new Date(b.date) -
+            new Date(a.date)
+    );
+
+    if (!sales.length) {
+
+        container.innerHTML = `
             <div class="empty-state">
-                <strong>Sem dados</strong>
-                <span>O ranking aparecerá após as primeiras vendas.</span>
+                <p>Nenhuma venda encontrada.</p>
             </div>
         `;
 
         return;
     }
 
-    element.innerHTML =
-        items.map(([name, value], index) => `
-            <div class="ranking-row">
+    container.innerHTML =
+        sales
+            .map(
+                sale => {
 
-                <span class="ranking-position">
-                    ${index + 1}
-                </span>
+                    const client =
+                        getClient(
+                            sale.clientId
+                        );
 
-                <div class="ranking-person">
+                    return `
+                        <div class="table-row">
 
-                    <div class="avatar-small">
-                        ${escapeHTML(
-                            initials(name)
-                        )}
-                    </div>
+                            <div>
+                                <strong>
+                                    ${escapeHTML(
+                                        client?.name ||
+                                        "Cliente"
+                                    )}
+                                </strong>
 
-                    <strong>
-                        ${escapeHTML(name)}
-                    </strong>
+                                <small>
+                                    ${formatDate(
+                                        sale.date
+                                    )}
+                                </small>
+                            </div>
 
-                </div>
+                            <div>
+                                ${currency(
+                                    sale.value
+                                )}
+                            </div>
 
-                <strong>
-                    ${currency(value)}
-                </strong>
+                            <div>
+                                ${escapeHTML(
+                                    sale.responsible
+                                )}
+                            </div>
 
-            </div>
-        `).join("");
+                            <div>
+                                ${escapeHTML(
+                                    sale.status
+                                )}
+                            </div>
+
+                            ${
+                                isAdmin
+                                    ? `
+                                <div class="row-actions">
+
+                                    <button
+                                        type="button"
+                                        data-action="edit-sale"
+                                        data-id="${escapeHTML(
+                                            sale.id
+                                        )}"
+                                    >
+                                        Editar
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        data-action="delete-sale"
+                                        data-id="${escapeHTML(
+                                            sale.id
+                                        )}"
+                                    >
+                                        Excluir
+                                    </button>
+
+                                </div>
+                            `
+                                    : ""
+                            }
+
+                        </div>
+                    `;
+                }
+            )
+            .join("");
 }
 
-
 /* =========================================================
-   ATIVIDADES
-   ========================================================= */
-
-function renderActivity() {
-
-    const element =
-        document.getElementById("activityList");
-
-    if (!element) return;
-
-    const activities =
-        data.activities.slice(0, 8);
-
-    if (!activities.length) {
-
-        element.innerHTML = `
-            <div class="empty-state">
-                <strong>Nenhuma atividade</strong>
-                <span>As ações do sistema aparecerão aqui.</span>
-            </div>
-        `;
-
-        return;
-    }
-
-    element.innerHTML =
-        activities.map(activity => `
-            <div class="activity-row">
-
-                <div class="activity-dot"></div>
-
-                <div>
-                    <strong>
-                        ${escapeHTML(activity.text)}
-                    </strong>
-
-                    <span>
-                        ${escapeHTML(
-                            activity.user || "NEXA"
-                        )}
-                        ·
-                        ${formatDate(
-                            activity.date?.slice(0, 10)
-                        )}
-                    </span>
-                </div>
-
-            </div>
-        `).join("");
-}
-
-
-/* =========================================================
-   TAREFAS PRIORITÁRIAS
-   ========================================================= */
-
-function renderPriorityTasks() {
-
-    const element =
-        document.getElementById("priorityTasks");
-
-    if (!element) return;
-
-    const tasks =
-        data.tasks
-            .filter(task => !task.completed)
-            .sort((a, b) => {
-
-                const priority = {
-                    high: 0,
-                    medium: 1,
-                    low: 2
-                };
-
-                return (
-                    priority[a.priority] -
-                    priority[b.priority]
-                );
-            })
-            .slice(0, 5);
-
-    if (!tasks.length) {
-
-        element.innerHTML = `
-            <div class="empty-state">
-                <strong>Tudo em dia</strong>
-                <span>Nenhuma tarefa pendente.</span>
-            </div>
-        `;
-
-        return;
-    }
-
-    element.innerHTML =
-        tasks.map(task => `
-            <div class="priority-task">
-
-                <div>
-                    <strong>
-                        ${escapeHTML(task.title)}
-                    </strong>
-
-                    <span>
-                        ${formatDate(task.dueDate)}
-                    </span>
-                </div>
-
-                <span class="priority-${escapeHTML(task.priority)}">
-                    ${escapeHTML(
-                        priorityLabel(task.priority)
-                    )}
-                </span>
-
-            </div>
-        `).join("");
-}
-
-
-/* =========================================================
-   CONTADORES DE CLIENTES
+   ESTATÍSTICAS CLIENTES
    ========================================================= */
 
 function renderClientStats() {
@@ -2367,104 +2719,221 @@ function renderClientStats() {
 
     const leads =
         data.clients.filter(
-            client => client.status === "lead"
+            client =>
+                client.status ===
+                "lead"
         ).length;
 
     const negotiation =
         data.clients.filter(
-            client => client.status === "negotiation"
+            client =>
+                client.status ===
+                "negotiation"
         ).length;
 
     const customers =
         data.clients.filter(
-            client => client.status === "customer"
+            client =>
+                client.status ===
+                "customer"
         ).length;
 
-    const set = (id, value) => {
+    setText(
+        "clientTotal",
+        total
+    );
 
-        const element =
-            document.getElementById(id);
+    setText(
+        "clientLeads",
+        leads
+    );
 
-        if (element) {
-            element.textContent = value;
-        }
-    };
+    setText(
+        "clientNegotiation",
+        negotiation
+    );
 
-    set("clientTotal", total);
-    set("clientLeads", leads);
-    set("clientNegotiation", negotiation);
-    set("clientCustomers", customers);
+    setText(
+        "clientCustomers",
+        customers
+    );
 }
 
-
 /* =========================================================
-   CONTADORES DE VENDAS
+   CLIENTES
    ========================================================= */
 
-function renderSalesStats() {
+function renderClients() {
 
-    const validSales =
-        data.sales.filter(
-            sale => sale.status !== "cancelled"
+    const container =
+        document.getElementById(
+            "clientList"
         );
 
-    const revenue =
-        validSales.reduce(
-            (sum, sale) =>
-                sum + Number(sale.value || 0),
-            0
-        );
+    if (!container) return;
 
-    const received =
-        data.sales
-            .filter(
-                sale => sale.status === "received"
-            )
-            .reduce(
-                (sum, sale) =>
-                    sum + Number(sale.value || 0),
-                0
+    const search =
+        (
+            document.getElementById(
+                "clientSearch"
+            )?.value || ""
+        )
+            .toLowerCase()
+            .trim();
+
+    const status =
+        document.getElementById(
+            "clientStatusFilter"
+        )?.value || "";
+
+    let clients =
+        [...data.clients];
+
+    if (search) {
+
+        clients =
+            clients.filter(
+                client => {
+
+                    const text =
+                        [
+                            client.name,
+                            client.company,
+                            client.phone,
+                            client.email,
+                            client.responsible
+                        ]
+                            .join(" ")
+                            .toLowerCase();
+
+                    return text.includes(
+                        search
+                    );
+                }
             );
+    }
 
-    const average =
-        validSales.length
-            ? revenue / validSales.length
-            : 0;
+    if (status) {
 
-    const set = (id, value) => {
+        clients =
+            clients.filter(
+                client =>
+                    client.status ===
+                    status
+            );
+    }
 
-        const element =
-            document.getElementById(id);
+    if (!clients.length) {
 
-        if (element) {
-            element.textContent = value;
-        }
-    };
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>Nenhum cliente encontrado.</p>
+            </div>
+        `;
 
-    set(
-        "salesRevenue",
-        currency(revenue)
-    );
+        return;
+    }
 
-    set(
-        "salesCount",
-        data.sales.length
-    );
+    container.innerHTML =
+        clients
+            .map(
+                client => `
+                    <div class="table-row">
 
-    set(
-        "salesReceived",
-        currency(received)
-    );
+                        <div>
+                            <strong>
+                                ${escapeHTML(
+                                    client.name
+                                )}
+                            </strong>
 
-    set(
-        "salesAverage",
-        currency(average)
-    );
+                            <small>
+                                ${escapeHTML(
+                                    client.company ||
+                                    ""
+                                )}
+                            </small>
+                        </div>
+
+                        <div>
+                            ${escapeHTML(
+                                client.phone ||
+                                "-"
+                            )}
+                        </div>
+
+                        <div>
+                            ${escapeHTML(
+                                client.status
+                            )}
+                        </div>
+
+                        <div>
+                            ${escapeHTML(
+                                client.responsible
+                            )}
+                        </div>
+
+                        <div>
+                            ${currency(
+                                client.potential
+                            )}
+                        </div>
+
+                        <div class="row-actions">
+
+                            ${
+                                client.phone
+                                    ? `
+                                <button
+                                    type="button"
+                                    data-action="whatsapp"
+                                    data-phone="${escapeHTML(
+                                        client.phone
+                                    )}"
+                                >
+                                    WhatsApp
+                                </button>
+                            `
+                                    : ""
+                            }
+
+                            ${
+                                isAdmin
+                                    ? `
+                                <button
+                                    type="button"
+                                    data-action="edit-client"
+                                    data-id="${escapeHTML(
+                                        client.id
+                                    )}"
+                                >
+                                    Editar
+                                </button>
+
+                                <button
+                                    type="button"
+                                    data-action="delete-client"
+                                    data-id="${escapeHTML(
+                                        client.id
+                                    )}"
+                                >
+                                    Excluir
+                                </button>
+                            `
+                                    : ""
+                            }
+
+                        </div>
+
+                    </div>
+                `
+            )
+            .join("");
 }
 
-
 /* =========================================================
-   CONTADORES DE TAREFAS
+   ESTATÍSTICAS TAREFAS
    ========================================================= */
 
 function renderTaskStats() {
@@ -2474,12 +2943,14 @@ function renderTaskStats() {
 
     const pending =
         data.tasks.filter(
-            task => !task.completed
+            task =>
+                !task.completed
         ).length;
 
     const completed =
         data.tasks.filter(
-            task => task.completed
+            task =>
+                task.completed
         ).length;
 
     const overdue =
@@ -2490,22 +2961,230 @@ function renderTaskStats() {
                 task.dueDate < today()
         ).length;
 
-    const set = (id, value) => {
+    setText(
+        "taskTotal",
+        total
+    );
 
-        const element =
-            document.getElementById(id);
+    setText(
+        "taskPending",
+        pending
+    );
 
-        if (element) {
-            element.textContent = value;
-        }
-    };
+    setText(
+        "taskCompleted",
+        completed
+    );
 
-    set("taskTotal", total);
-    set("taskPending", pending);
-    set("taskCompleted", completed);
-    set("taskOverdue", overdue);
+    setText(
+        "taskOverdue",
+        overdue
+    );
 }
 
+/* =========================================================
+   TAREFAS
+   ========================================================= */
+
+function renderTasks() {
+
+    const container =
+        document.getElementById(
+            "fullTaskList"
+        );
+
+    if (!container) return;
+
+    const activeFilter =
+        document.querySelector(
+            "[data-task-filter].active"
+        )?.dataset.taskFilter ||
+        "all";
+
+    let tasks =
+        [...data.tasks];
+
+    if (
+        activeFilter ===
+        "pending"
+    ) {
+
+        tasks =
+            tasks.filter(
+                task =>
+                    !task.completed
+            );
+    }
+
+    if (
+        activeFilter ===
+        "completed"
+    ) {
+
+        tasks =
+            tasks.filter(
+                task =>
+                    task.completed
+            );
+    }
+
+    if (
+        activeFilter ===
+        "overdue"
+    ) {
+
+        tasks =
+            tasks.filter(
+                task =>
+                    !task.completed &&
+                    task.dueDate &&
+                    task.dueDate <
+                        today()
+            );
+    }
+
+    tasks.sort(
+        (a, b) => {
+
+            if (
+                a.completed !==
+                b.completed
+            ) {
+                return a.completed
+                    ? 1
+                    : -1;
+            }
+
+            return String(
+                a.dueDate
+            ).localeCompare(
+                String(
+                    b.dueDate
+                )
+            );
+        }
+    );
+
+    if (!tasks.length) {
+
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>Nenhuma tarefa encontrada.</p>
+            </div>
+        `;
+
+        return;
+    }
+
+    container.innerHTML =
+        tasks
+            .map(
+                task => {
+
+                    const overdue =
+                        !task.completed &&
+                        task.dueDate &&
+                        task.dueDate <
+                            today();
+
+                    return `
+                        <div class="task-item ${
+                            task.completed
+                                ? "completed"
+                                : ""
+                        }">
+
+                            <div class="task-check">
+
+                                <button
+                                    type="button"
+                                    data-action="toggle-task"
+                                    data-id="${escapeHTML(
+                                        task.id
+                                    )}"
+                                    ${
+                                        task.completed
+                                            ? "aria-label=\"Reabrir tarefa\""
+                                            : "aria-label=\"Concluir tarefa\""
+                                    }
+                                >
+                                    ${
+                                        task.completed
+                                            ? "✓"
+                                            : "○"
+                                    }
+                                </button>
+
+                            </div>
+
+                            <div class="task-content">
+
+                                <strong>
+                                    ${escapeHTML(
+                                        task.title
+                                    )}
+                                </strong>
+
+                                <p>
+                                    ${escapeHTML(
+                                        task.description ||
+                                        ""
+                                    )}
+                                </p>
+
+                                <small>
+                                    ${escapeHTML(
+                                        task.owner
+                                    )}
+                                    ·
+                                    ${formatDate(
+                                        task.dueDate
+                                    )}
+                                    ${
+                                        overdue
+                                            ? " · Atrasada"
+                                            : ""
+                                    }
+                                </small>
+
+                            </div>
+
+                            <div class="task-actions">
+
+                                ${
+                                    isAdmin
+                                        ? `
+                                    <button
+                                        type="button"
+                                        data-action="edit-task"
+                                        data-id="${escapeHTML(
+                                            task.id
+                                        )}"
+                                    >
+                                        Editar
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        data-action="delete-task"
+                                        data-id="${escapeHTML(
+                                            task.id
+                                        )}"
+                                    >
+                                        Excluir
+                                    </button>
+                                `
+                                        : ""
+                                }
+
+                            </div>
+
+                        </div>
+                    `;
+                }
+            )
+            .join("");
+}
 
 /* =========================================================
    METAS
@@ -2513,143 +3192,111 @@ function renderTaskStats() {
 
 function renderGoals() {
 
-    const generalGoal =
-        document.getElementById("generalGoal");
+    const general =
+        Number(
+            data.goals.general
+        ) || 0;
 
-    if (generalGoal) {
+    setText(
+        "generalGoal",
+        currency(general)
+    );
 
-        const goal =
-            Number(data.goals.general || 0);
+    const container =
+        document.getElementById(
+            "employeeGoals"
+        );
 
-        const revenue =
-            data.sales
-                .filter(
-                    sale => sale.status !== "cancelled"
-                )
-                .reduce(
-                    (sum, sale) =>
-                        sum + Number(sale.value || 0),
-                    0
-                );
+    if (!container) return;
 
-        const percent =
-            goal > 0
-                ? Math.min(
-                    100,
-                    Math.round(
-                        (revenue / goal) * 100
-                    )
-                )
-                : 0;
-
-        generalGoal.innerHTML = `
-            <div class="goal-value">
-                ${currency(revenue)}
-            </div>
-
-            <div class="goal-target">
-                Meta: ${currency(goal)}
-            </div>
-
-            <div class="goal-progress">
-                <div
-                    class="goal-progress-bar"
-                    style="width:${percent}%"
-                ></div>
-            </div>
-
-            <div class="goal-percent">
-                ${percent}%
-            </div>
-        `;
-    }
-
-
-    const employeeGoals =
-        document.getElementById("employeeGoals");
-
-    if (!employeeGoals) return;
-
-    const employees = getEmployees();
+    const employees =
+        getEmployees();
 
     if (!employees.length) {
 
-        employeeGoals.innerHTML = `
-            <div class="empty-state">
-                Nenhum funcionário cadastrado.
-            </div>
-        `;
+        container.innerHTML = "";
 
         return;
     }
 
-    employeeGoals.innerHTML =
-        employees.map(employee => {
+    container.innerHTML =
+        employees
+            .map(
+                employee => {
 
-            const goal =
-                Number(
-                    data.goals.employees?.[
-                        employee.nome
-                    ] || 0
-                );
+                    const goal =
+                        Number(
+                            data.goals
+                                .employees?.[
+                                employee.nome
+                            ]
+                        ) || 0;
 
-            const revenue =
-                data.sales
-                    .filter(
-                        sale =>
-                            sale.responsible ===
-                            employee.nome &&
-                            sale.status !== "cancelled"
-                    )
-                    .reduce(
-                        (sum, sale) =>
-                            sum +
-                            Number(sale.value || 0),
-                        0
-                    );
+                    const revenue =
+                        data.sales
+                            .filter(
+                                sale =>
+                                    sale.responsible ===
+                                    employee.nome &&
+                                    sale.status !==
+                                        "cancelled"
+                            )
+                            .reduce(
+                                (sum, sale) =>
+                                    sum +
+                                    Number(
+                                        sale.value ||
+                                            0
+                                    ),
+                                0
+                            );
 
-            const percent =
-                goal > 0
-                    ? Math.min(
-                        100,
-                        Math.round(
-                            (revenue / goal) * 100
-                        )
-                    )
-                    : 0;
+                    const percent =
+                        goal > 0
+                            ? Math.min(
+                                  100,
+                                  Math.round(
+                                      (revenue /
+                                          goal) *
+                                          100
+                                  )
+                              )
+                            : 0;
 
-            return `
-                <div class="employee-goal">
+                    return `
+                        <div class="goal-item">
 
-                    <div>
-                        <strong>
-                            ${escapeHTML(employee.nome)}
-                        </strong>
+                            <div>
+                                <strong>
+                                    ${escapeHTML(
+                                        employee.nome
+                                    )}
+                                </strong>
 
-                        <span>
-                            ${currency(revenue)}
-                            /
-                            ${currency(goal)}
-                        </span>
-                    </div>
+                                <small>
+                                    ${currency(
+                                        revenue
+                                    )}
+                                    ${
+                                        goal
+                                            ? ` de ${currency(
+                                                  goal
+                                              )}`
+                                            : ""
+                                    }
+                                </small>
+                            </div>
 
-                    <div class="goal-progress">
-                        <div
-                            class="goal-progress-bar"
-                            style="width:${percent}%"
-                        ></div>
-                    </div>
+                            <div>
+                                ${percent}%
+                            </div>
 
-                    <span>
-                        ${percent}%
-                    </span>
-
-                </div>
-            `;
-
-        }).join("");
+                        </div>
+                    `;
+                }
+            )
+            .join("");
 }
-
 
 /* =========================================================
    EQUIPE
@@ -2657,64 +3304,44 @@ function renderGoals() {
 
 function renderTeam() {
 
-    const element =
-        document.getElementById("teamList");
+    const container =
+        document.getElementById(
+            "teamList"
+        );
 
-    if (!element) return;
+    if (!container) return;
 
-    element.innerHTML =
-        USERS.map(user => {
+    container.innerHTML =
+        USERS
+            .map(
+                user => `
+                    <div class="team-item">
 
-            const sales =
-                data.sales.filter(
-                    sale =>
-                        sale.responsible ===
-                        user.nome
-                );
-
-            const revenue =
-                sales.reduce(
-                    (sum, sale) =>
-                        sum +
-                        Number(sale.value || 0),
-                    0
-                );
-
-            return `
-                <div class="team-row">
-
-                    <div class="team-person">
-
-                        <div class="avatar-small">
-                            ${escapeHTML(user.avatar)}
+                        <div class="team-avatar">
+                            ${escapeHTML(
+                                user.avatar
+                            )}
                         </div>
 
                         <div>
                             <strong>
-                                ${escapeHTML(user.nome)}
+                                ${escapeHTML(
+                                    user.nome
+                                )}
                             </strong>
 
-                            <span>
-                                ${escapeHTML(user.cargo)}
-                            </span>
+                            <small>
+                                ${escapeHTML(
+                                    user.cargo
+                                )}
+                            </small>
                         </div>
 
                     </div>
-
-                    <div>
-                        ${sales.length} vendas
-                    </div>
-
-                    <div>
-                        ${currency(revenue)}
-                    </div>
-
-                </div>
-            `;
-
-        }).join("");
+                `
+            )
+            .join("");
 }
-
 
 /* =========================================================
    RELATÓRIOS
@@ -2725,96 +3352,302 @@ function renderReports() {
     const revenue =
         data.sales
             .filter(
-                sale => sale.status !== "cancelled"
+                sale =>
+                    sale.status !==
+                    "cancelled"
             )
             .reduce(
                 (sum, sale) =>
-                    sum + Number(sale.value || 0),
+                    sum +
+                    Number(
+                        sale.value || 0
+                    ),
                 0
             );
 
     const completed =
         data.tasks.filter(
-            task => task.completed
+            task =>
+                task.completed
         ).length;
 
     const average =
         data.sales.length
-            ? revenue / data.sales.length
+            ? revenue /
+              data.sales.length
             : 0;
 
-    const values = {
-        reportClients: data.clients.length,
-        reportSales: data.sales.length,
-        reportRevenue: currency(revenue),
-        reportTasks: data.tasks.length,
-        reportCompleted: completed,
-        reportAverage: currency(average)
-    };
+    setText(
+        "reportClients",
+        data.clients.length
+    );
 
-    Object.entries(values).forEach(
-        ([id, value]) => {
+    setText(
+        "reportSales",
+        data.sales.length
+    );
 
-            const element =
-                document.getElementById(id);
+    setText(
+        "reportRevenue",
+        currency(revenue)
+    );
 
-            if (element) {
-                element.textContent = value;
-            }
+    setText(
+        "reportTasks",
+        data.tasks.length
+    );
+
+    setText(
+        "reportCompleted",
+        completed
+    );
+
+    setText(
+        "reportAverage",
+        currency(average)
+    );
+
+    renderRanking();
+}
+
+/* =========================================================
+   RANKING
+   ========================================================= */
+
+function renderRanking() {
+
+    const container =
+        document.getElementById(
+            "rankingList"
+        );
+
+    if (!container) return;
+
+    const totals = {};
+
+    USERS.forEach(
+        user => {
+            totals[user.nome] = 0;
         }
     );
 
-    const ranking =
-        document.getElementById("reportRanking");
+    data.sales
+        .filter(
+            sale =>
+                sale.status !==
+                "cancelled"
+        )
+        .forEach(
+            sale => {
 
-    if (ranking) {
+                if (
+                    !totals[
+                        sale.responsible
+                    ]
+                ) {
+                    totals[
+                        sale.responsible
+                    ] = 0;
+                }
 
-        const totals = {};
-
-        data.sales.forEach(sale => {
-
-            if (sale.status === "cancelled") {
-                return;
+                totals[
+                    sale.responsible
+                ] += Number(
+                    sale.value || 0
+                );
             }
+        );
 
-            totals[sale.responsible] =
-                (totals[sale.responsible] || 0) +
-                Number(sale.value || 0);
-        });
+    const ranking =
+        Object.entries(
+            totals
+        )
+            .sort(
+                (a, b) =>
+                    b[1] - a[1]
+            );
 
-        const items =
-            Object.entries(totals)
-                .sort((a, b) => b[1] - a[1]);
+    const html =
+        ranking
+            .map(
+                ([name, value], index) => `
+                    <div class="ranking-item">
 
-        ranking.innerHTML =
-            items.length
-                ? items.map(
-                    ([name, value], index) => `
-                        <div class="report-ranking-row">
+                        <span class="ranking-position">
+                            ${index + 1}
+                        </span>
 
-                            <span>
-                                ${index + 1}
-                            </span>
+                        <div class="ranking-person">
 
                             <strong>
-                                ${escapeHTML(name)}
-                            </strong>
-
-                            <strong>
-                                ${currency(value)}
+                                ${escapeHTML(
+                                    name
+                                )}
                             </strong>
 
                         </div>
-                    `
-                ).join("")
-                : `
-                    <div class="empty-state">
-                        Nenhum dado disponível.
+
+                        <strong>
+                            ${currency(value)}
+                        </strong>
+
                     </div>
-                `;
-    }
+                `
+            )
+            .join("");
+
+    container.innerHTML =
+        html ||
+        `
+            <div class="empty-state">
+                <p>Nenhuma venda registrada.</p>
+            </div>
+        `;
+
+    setText(
+        "reportRanking",
+        ranking.length
+            ? ranking
+                  .map(
+                      ([name, value]) =>
+                          `${name}: ${currency(
+                              value
+                          )}`
+                  )
+                  .join(" • ")
+            : "Sem vendas"
+    );
 }
 
+/* =========================================================
+   ATIVIDADES
+   ========================================================= */
+
+function renderActivity() {
+
+    const container =
+        document.getElementById(
+            "activityList"
+        );
+
+    if (!container) return;
+
+    const activities =
+        data.activities
+            .slice(0, 10);
+
+    if (!activities.length) {
+
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>Nenhuma atividade ainda.</p>
+            </div>
+        `;
+
+        return;
+    }
+
+    container.innerHTML =
+        activities
+            .map(
+                activity => `
+                    <div class="activity-item">
+
+                        <div>
+                            <strong>
+                                ${escapeHTML(
+                                    activity.title
+                                )}
+                            </strong>
+
+                            <p>
+                                ${escapeHTML(
+                                    activity.description ||
+                                    ""
+                                )}
+                            </p>
+
+                            <small>
+                                ${formatDate(
+                                    activity.date
+                                )}
+                            </small>
+                        </div>
+
+                    </div>
+                `
+            )
+            .join("");
+}
+
+/* =========================================================
+   TAREFAS PRIORITÁRIAS
+   ========================================================= */
+
+function renderPriorityTasks() {
+
+    const container =
+        document.getElementById(
+            "priorityTasks"
+        );
+
+    if (!container) return;
+
+    const tasks =
+        data.tasks
+            .filter(
+                task =>
+                    !task.completed
+            )
+            .sort(
+                (a, b) =>
+                    new Date(
+                        a.dueDate
+                    ) -
+                    new Date(
+                        b.dueDate
+                    )
+            )
+            .slice(0, 5);
+
+    if (!tasks.length) {
+
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>Nenhuma tarefa pendente.</p>
+            </div>
+        `;
+
+        return;
+    }
+
+    container.innerHTML =
+        tasks
+            .map(
+                task => `
+                    <div class="priority-task">
+
+                        <strong>
+                            ${escapeHTML(
+                                task.title
+                            )}
+                        </strong>
+
+                        <small>
+                            ${formatDate(
+                                task.dueDate
+                            )}
+                            ·
+                            ${escapeHTML(
+                                task.owner
+                            )}
+                        </small>
+
+                    </div>
+                `
+            )
+            .join("");
+}
 
 /* =========================================================
    NOTIFICAÇÕES
@@ -2823,75 +3656,24 @@ function renderReports() {
 function renderNotifications() {
 
     const count =
-        document.getElementById("notificationCount");
-
-    if (!count) return;
-
-    const unread =
         data.notifications.filter(
-            notification =>
-                !notification.read
+            item =>
+                !item.read
         ).length;
 
-    count.textContent =
-        unread > 99
+    setText(
+        "notificationCount",
+        count > 99
             ? "99+"
-            : unread;
-}
-
-
-/* =========================================================
-   WHATSAPP
-   ========================================================= */
-
-function openWhatsApp(phone) {
-
-    if (!phone) {
-        showToast(
-            "Telefone não informado.",
-            "error"
-        );
-
-        return;
-    }
-
-    const numbers =
-        String(phone).replace(/\D/g, "");
-
-    if (!numbers) {
-        showToast(
-            "Número inválido.",
-            "error"
-        );
-
-        return;
-    }
-
-    const url =
-        `https://wa.me/55${numbers}`;
-
-    window.open(
-        url,
-        "_blank",
-        "noopener,noreferrer"
+            : count
     );
 }
-
 
 /* =========================================================
    EXPORTAR
    ========================================================= */
 
 function exportData() {
-
-    if (!isAdmin) {
-        showToast(
-            "Somente o administrador pode exportar.",
-            "error"
-        );
-
-        return;
-    }
 
     const blob =
         new Blob(
@@ -2903,32 +3685,34 @@ function exportData() {
                 )
             ],
             {
-                type: "application/json"
+                type:
+                    "application/json"
             }
         );
 
     const url =
-        URL.createObjectURL(blob);
+        URL.createObjectURL(
+            blob
+        );
 
     const link =
-        document.createElement("a");
+        document.createElement(
+            "a"
+        );
 
     link.href = url;
 
     link.download =
         `nexa-management-${today()}.json`;
 
-    document.body.appendChild(link);
-
     link.click();
-
-    link.remove();
 
     URL.revokeObjectURL(url);
 
-    showToast("Backup exportado.");
+    showToast(
+        "Dados exportados."
+    );
 }
-
 
 /* =========================================================
    IMPORTAR
@@ -2937,15 +3721,14 @@ function exportData() {
 async function importData(file) {
 
     if (!isAdmin) {
+
         showToast(
-            "Somente o administrador pode importar.",
+            "Apenas o administrador pode importar dados.",
             "error"
         );
 
         return;
     }
-
-    if (!file) return;
 
     try {
 
@@ -2956,46 +3739,42 @@ async function importData(file) {
             JSON.parse(text);
 
         data =
-            normalizeData(imported);
-
-        data.clients =
-            data.clients.map(normalizeClient);
-
-        data.sales =
-            data.sales.map(normalizeSale);
-
-        data.tasks =
-            data.tasks.map(normalizeTask);
+            normalizeData(
+                imported
+            );
 
         addActivity(
-            "Backup importado."
+            "system",
+            "Dados importados"
         );
 
         renderAll();
 
-        await saveData(true);
+        await saveData();
 
     } catch (error) {
 
-        console.error(error);
+        console.error(
+            error
+        );
 
         showToast(
-            "Arquivo JSON inválido.",
+            "Arquivo inválido.",
             "error"
         );
     }
 }
 
-
 /* =========================================================
-   RESETAR BANCO
+   RESET
    ========================================================= */
 
 async function resetData() {
 
     if (!isAdmin) {
+
         showToast(
-            "Somente o administrador pode resetar.",
+            "Apenas o administrador pode resetar os dados.",
             "error"
         );
 
@@ -3004,21 +3783,25 @@ async function resetData() {
 
     const confirmed =
         confirm(
-            "ATENÇÃO!\n\nIsso apagará clientes, vendas, tarefas, atividades e metas.\n\nDeseja continuar?"
+            "ATENÇÃO!\n\nIsso apagará clientes, vendas, tarefas, atividades, notificações e metas.\n\nDeseja continuar?"
         );
 
     if (!confirmed) return;
 
-    data = defaultData();
+    data =
+        defaultData();
 
     renderAll();
 
-    await saveData(true);
+    await saveData();
+
+    showToast(
+        "Dados resetados."
+    );
 }
 
-
 /* =========================================================
-   DELEGAÇÃO DE EVENTOS
+   EVENTOS — DATA ACTION
    ========================================================= */
 
 document.addEventListener(
@@ -3026,7 +3809,9 @@ document.addEventListener(
     async event => {
 
         const target =
-            event.target.closest("[data-action]");
+            event.target.closest(
+                "[data-action]"
+            );
 
         if (!target) return;
 
@@ -3036,12 +3821,10 @@ document.addEventListener(
         const id =
             target.dataset.id;
 
-
-        /* =========================
-           NAVEGAÇÃO
-           ========================= */
-
-        if (action === "navigate") {
+        if (
+            action ===
+            "navigate"
+        ) {
 
             navigateTo(
                 target.dataset.page
@@ -3050,44 +3833,42 @@ document.addEventListener(
             return;
         }
 
-
-        /* =========================
-           ADMIN
-           ========================= */
-
-        if (action === "admin-login") {
+        if (
+            action ===
+            "admin-login"
+        ) {
 
             requestAdminAccess();
 
             return;
         }
 
-
-        if (action === "logout") {
+        if (
+            action ===
+            "logout"
+        ) {
 
             exitAdminMode();
 
             return;
         }
 
+        if (
+            action ===
+            "new-sale"
+        ) {
 
-        /* =========================
-           NOVA VENDA
-           ========================= */
-
-        if (action === "new-sale") {
-
-            openModal("sale");
+            openModal(
+                "sale"
+            );
 
             return;
         }
 
-
-        /* =========================
-           EDITAR VENDA
-           ========================= */
-
-        if (action === "edit-sale") {
+        if (
+            action ===
+            "edit-sale"
+        ) {
 
             openModal(
                 "sale",
@@ -3097,36 +3878,34 @@ document.addEventListener(
             return;
         }
 
+        if (
+            action ===
+            "delete-sale"
+        ) {
 
-        /* =========================
-           EXCLUIR VENDA
-           ========================= */
-
-        if (action === "delete-sale") {
-
-            await deleteSale(id);
-
-            return;
-        }
-
-
-        /* =========================
-           NOVO CLIENTE
-           ========================= */
-
-        if (action === "new-client") {
-
-            openModal("client");
+            await deleteSale(
+                id
+            );
 
             return;
         }
 
+        if (
+            action ===
+            "new-client"
+        ) {
 
-        /* =========================
-           EDITAR CLIENTE
-           ========================= */
+            openModal(
+                "client"
+            );
 
-        if (action === "edit-client") {
+            return;
+        }
+
+        if (
+            action ===
+            "edit-client"
+        ) {
 
             openModal(
                 "client",
@@ -3136,24 +3915,22 @@ document.addEventListener(
             return;
         }
 
+        if (
+            action ===
+            "delete-client"
+        ) {
 
-        /* =========================
-           EXCLUIR CLIENTE
-           ========================= */
-
-        if (action === "delete-client") {
-
-            await deleteClient(id);
+            await deleteClient(
+                id
+            );
 
             return;
         }
 
-
-        /* =========================
-           WHATSAPP
-           ========================= */
-
-        if (action === "whatsapp") {
+        if (
+            action ===
+            "whatsapp"
+        ) {
 
             openWhatsApp(
                 target.dataset.phone
@@ -3162,24 +3939,22 @@ document.addEventListener(
             return;
         }
 
+        if (
+            action ===
+            "new-task"
+        ) {
 
-        /* =========================
-           NOVA TAREFA
-           ========================= */
-
-        if (action === "new-task") {
-
-            openModal("task");
+            openModal(
+                "task"
+            );
 
             return;
         }
 
-
-        /* =========================
-           EDITAR TAREFA
-           ========================= */
-
-        if (action === "edit-task") {
+        if (
+            action ===
+            "edit-task"
+        ) {
 
             openModal(
                 "task",
@@ -3189,48 +3964,46 @@ document.addEventListener(
             return;
         }
 
+        if (
+            action ===
+            "delete-task"
+        ) {
 
-        /* =========================
-           EXCLUIR TAREFA
-           ========================= */
-
-        if (action === "delete-task") {
-
-            await deleteTask(id);
-
-            return;
-        }
-
-
-        /* =========================
-           CONCLUIR TAREFA
-           ========================= */
-
-        if (action === "toggle-task") {
-
-            await toggleTask(id);
+            await deleteTask(
+                id
+            );
 
             return;
         }
 
+        if (
+            action ===
+            "toggle-task"
+        ) {
 
-        /* =========================
-           META
-           ========================= */
-
-        if (action === "edit-general-goal") {
-
-            openModal("goal");
+            await toggleTask(
+                id
+            );
 
             return;
         }
 
+        if (
+            action ===
+            "edit-general-goal"
+        ) {
 
-        /* =========================
-           NOTIFICAÇÕES
-           ========================= */
+            openModal(
+                "goal"
+            );
 
-        if (action === "notifications") {
+            return;
+        }
+
+        if (
+            action ===
+            "notifications"
+        ) {
 
             data.notifications =
                 data.notifications.map(
@@ -3243,44 +4016,39 @@ document.addEventListener(
             renderNotifications();
 
             if (isAdmin) {
-                await saveData();
+                await saveData(
+                    false
+                );
             }
 
             return;
         }
 
-
-        /* =========================
-           EXPORTAR
-           ========================= */
-
-        if (action === "export") {
+        if (
+            action ===
+            "export"
+        ) {
 
             exportData();
 
             return;
         }
 
-
-        /* =========================
-           RESETAR
-           ========================= */
-
-        if (action === "reset") {
+        if (
+            action ===
+            "reset"
+        ) {
 
             await resetData();
 
             return;
         }
 
-
-        /* =========================
-           FECHAR MODAL
-           ========================= */
-
         if (
-            action === "close-modal" ||
-            action === "cancel-modal"
+            action ===
+                "close-modal" ||
+            action ===
+                "cancel-modal"
         ) {
 
             closeModal();
@@ -3288,12 +4056,10 @@ document.addEventListener(
             return;
         }
 
-
-        /* =========================
-           SUBMIT MODAL
-           ========================= */
-
-        if (action === "submit-modal") {
+        if (
+            action ===
+            "submit-modal"
+        ) {
 
             await submitModal();
 
@@ -3302,9 +4068,8 @@ document.addEventListener(
     }
 );
 
-
 /* =========================================================
-   FORMULÁRIO DO MODAL
+   FORM SUBMIT
    ========================================================= */
 
 document.addEventListener(
@@ -3324,9 +4089,8 @@ document.addEventListener(
     }
 );
 
-
 /* =========================================================
-   FILTROS
+   PESQUISA
    ========================================================= */
 
 document.addEventListener(
@@ -3349,16 +4113,21 @@ document.addEventListener(
     }
 );
 
+/* =========================================================
+   SELECTS / IMPORT
+   ========================================================= */
+
 document.addEventListener(
     "change",
     event => {
 
         if (
             event.target.id ===
-            "salesStatusFilter" ||
+                "salesStatusFilter" ||
             event.target.id ===
-            "salesResponsibleFilter"
+                "salesResponsibleFilter"
         ) {
+
             renderSales();
         }
 
@@ -3366,6 +4135,7 @@ document.addEventListener(
             event.target.id ===
             "clientStatusFilter"
         ) {
+
             renderClients();
         }
 
@@ -3378,12 +4148,13 @@ document.addEventListener(
                 event.target.files?.[0];
 
             if (file) {
-                importData(file);
+                importData(
+                    file
+                );
             }
         }
     }
 );
-
 
 /* =========================================================
    FILTROS DE TAREFAS
@@ -3404,18 +4175,20 @@ document.addEventListener(
             .querySelectorAll(
                 "[data-task-filter]"
             )
-            .forEach(item => {
-                item.classList.remove(
-                    "active"
-                );
-            });
+            .forEach(
+                item =>
+                    item.classList.remove(
+                        "active"
+                    )
+            );
 
-        filter.classList.add("active");
+        filter.classList.add(
+            "active"
+        );
 
         renderTasks();
     }
 );
-
 
 /* =========================================================
    MODAL — FECHAR CLICANDO FORA
@@ -3442,9 +4215,8 @@ if (modalOverlay) {
     );
 }
 
-
 /* =========================================================
-   BOTÃO MOBILE
+   MENU MOBILE
    ========================================================= */
 
 const mobileMenu =
@@ -3465,29 +4237,8 @@ if (mobileMenu) {
     );
 }
 
-
 /* =========================================================
-   NAVEGAÇÃO SIDEBAR
-   ========================================================= */
-
-document.querySelectorAll(
-    "[data-page]"
-).forEach(element => {
-
-    element.addEventListener(
-        "click",
-        () => {
-
-            navigateTo(
-                element.dataset.page
-            );
-        }
-    );
-});
-
-
-/* =========================================================
-   MODAL BUTTONS
+   BOTÕES DO MODAL
    ========================================================= */
 
 const modalClose =
@@ -3500,37 +4251,27 @@ const modalCancel =
         "modalCancel"
     );
 
-if (modalClose) {
-    modalClose.addEventListener(
-        "click",
-        closeModal
-    );
-}
-
-if (modalCancel) {
-    modalCancel.addEventListener(
-        "click",
-        closeModal
-    );
-}
-
 const modalSubmit =
     document.getElementById(
         "modalSubmit"
     );
 
-if (modalSubmit) {
+modalClose?.addEventListener(
+    "click",
+    closeModal
+);
 
-    modalSubmit.addEventListener(
-        "click",
-        async () => {
+modalCancel?.addEventListener(
+    "click",
+    closeModal
+);
 
-            await submitModal();
-
-        }
-    );
-}
-
+modalSubmit?.addEventListener(
+    "click",
+    async () => {
+        await submitModal();
+    }
+);
 
 /* =========================================================
    NOTIFICAÇÕES
@@ -3541,36 +4282,34 @@ const notificationButton =
         "notificationButton"
     );
 
-if (notificationButton) {
+notificationButton?.addEventListener(
+    "click",
+    async () => {
 
-    notificationButton.addEventListener(
-        "click",
-        async () => {
+        data.notifications =
+            data.notifications.map(
+                notification => ({
+                    ...notification,
+                    read: true
+                })
+            );
 
-            data.notifications =
-                data.notifications.map(
-                    item => ({
-                        ...item,
-                        read: true
-                    })
-                );
+        renderNotifications();
 
-            renderNotifications();
-
-            if (isAdmin) {
-                await saveData();
-            }
-
-            showToast(
-                "Notificações visualizadas."
+        if (isAdmin) {
+            await saveData(
+                false
             );
         }
-    );
-}
 
+        showToast(
+            "Notificações visualizadas."
+        );
+    }
+);
 
 /* =========================================================
-   PERFIL — CLIQUE PARA ADMIN
+   AVATAR — ADMIN
    ========================================================= */
 
 const topAvatar =
@@ -3580,14 +4319,34 @@ const topAvatar =
 
 if (topAvatar) {
 
-    topAvatar.style.cursor = "pointer";
+    topAvatar.style.cursor =
+        "pointer";
+
+    topAvatar.title =
+        "Selecionar usuário / administrador";
 
     topAvatar.addEventListener(
         "click",
-        requestAdminAccess
+        () => {
+
+            if (isAdmin) {
+
+                const change =
+                    confirm(
+                        "Você está no modo administrador.\n\nOK = sair do modo administrador\nCancelar = continuar"
+                    );
+
+                if (change) {
+                    exitAdminMode();
+                }
+
+                return;
+            }
+
+            requestUserSelection();
+        }
     );
 }
-
 
 /* =========================================================
    SINCRONIZAÇÃO AUTOMÁTICA
@@ -3596,17 +4355,14 @@ if (topAvatar) {
 function startPolling() {
 
     if (pollTimer) {
-        clearInterval(pollTimer);
+        clearInterval(
+            pollTimer
+        );
     }
 
     pollTimer =
         setInterval(
             async () => {
-
-                /*
-                 * Não buscamos dados enquanto o administrador
-                 * está digitando em um modal.
-                 */
 
                 const modal =
                     document.getElementById(
@@ -3625,13 +4381,13 @@ function startPolling() {
                     return;
                 }
 
-                await loadData(false);
-
+                await loadData(
+                    false
+                );
             },
-            8000
+            POLL_INTERVAL
         );
 }
-
 
 /* =========================================================
    RENDER GERAL
@@ -3644,15 +4400,12 @@ function renderAll() {
     renderDashboard();
 
     renderSalesStats();
-
     renderSales();
 
     renderClientStats();
-
     renderClients();
 
     renderTaskStats();
-
     renderTasks();
 
     renderGoals();
@@ -3670,33 +4423,54 @@ function renderAll() {
     renderNotifications();
 }
 
-
 /* =========================================================
    INICIALIZAÇÃO
    ========================================================= */
 
 async function init() {
 
-    /*
-     * Não existe mais login.
-     *
-     * O visitante entra como visualização.
-     * Se houver token salvo neste navegador,
-     * o modo administrador é ativado.
-     */
-
     isAdmin =
-        Boolean(adminToken);
+        Boolean(
+            localStorage.getItem(
+                ADMIN_TOKEN_KEY
+            )
+        );
 
-    updateProfileUI();
+    adminToken =
+        localStorage.getItem(
+            ADMIN_TOKEN_KEY
+        ) || "";
+
+    selectedUserName =
+        localStorage.getItem(
+            USER_NAME_KEY
+        ) || "";
+
+    updateCurrentUser();
 
     renderAll();
+
+    /*
+     * Se ainda não escolheu um nome
+     * e não está no modo administrador,
+     * mostra a identificação.
+     */
+
+    if (
+        !isAdmin &&
+        !selectedUserName
+    ) {
+        requestUserSelection();
+    }
 
     await loadData();
 
     startPolling();
-}
 
+    navigateTo(
+        currentPage
+    );
+}
 
 /* =========================================================
    INICIAR
