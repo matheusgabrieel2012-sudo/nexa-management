@@ -5,44 +5,72 @@ export default async function handler(req, res) {
         NEXA_ADMIN_TOKEN
     } = process.env;
 
-    // Verifica se as variáveis da Vercel existem
-    if (!SUPABASE_URL || !SUPABASE_SECRET_KEY || !NEXA_ADMIN_TOKEN) {
+    // ==========================================
+    // VERIFICAR VARIÁVEIS
+    // ==========================================
+
+    if (!SUPABASE_URL) {
         return res.status(500).json({
-            error: "Variáveis de ambiente não configuradas."
+            error: "SUPABASE_URL não configurada na Vercel."
         });
     }
 
-    const supabaseUrl =
-        `${SUPABASE_URL}/rest/v1/nexa_store?id=eq.1`;
+    if (!SUPABASE_SECRET_KEY) {
+        return res.status(500).json({
+            error: "SUPABASE_SECRET_KEY não configurada na Vercel."
+        });
+    }
+
+    if (!NEXA_ADMIN_TOKEN) {
+        return res.status(500).json({
+            error: "NEXA_ADMIN_TOKEN não configurada na Vercel."
+        });
+    }
+
+    // Remove uma possível "/" no final da URL
+    const baseUrl = SUPABASE_URL.replace(/\/+$/, "");
+
+    // URL da tabela
+    const supabaseUrl = `${baseUrl}/rest/v1/nexa_store`;
 
     // ==========================================
-    // GET — buscar dados
+    // GET
+    // Buscar dados do NEXA
     // ==========================================
 
     if (req.method === "GET") {
         try {
             const response = await fetch(
-                `${supabaseUrl}&select=data,updated_at`,
+                `${supabaseUrl}?id=eq.1&select=data,updated_at`,
                 {
                     method: "GET",
                     headers: {
-                        apikey: SUPABASE_SECRET_KEY
+                        "apikey": SUPABASE_SECRET_KEY
                     }
                 }
             );
 
-            if (!response.ok) {
-                const errorText = await response.text();
+            const responseText = await response.text();
 
+            if (!response.ok) {
                 return res.status(response.status).json({
                     error: "Erro ao buscar dados do Supabase.",
-                    details: errorText
+                    details: responseText
                 });
             }
 
-            const rows = await response.json();
+            let rows;
 
-            if (!rows.length) {
+            try {
+                rows = JSON.parse(responseText);
+            } catch {
+                return res.status(500).json({
+                    error: "Supabase retornou uma resposta inválida.",
+                    details: responseText
+                });
+            }
+
+            if (!Array.isArray(rows) || rows.length === 0) {
                 return res.status(404).json({
                     error: "Registro principal do NEXA não encontrado."
                 });
@@ -62,51 +90,71 @@ export default async function handler(req, res) {
     }
 
     // ==========================================
-    // PUT — salvar dados
+    // PUT
+    // Salvar dados do NEXA
     // ==========================================
 
     if (req.method === "PUT") {
 
+        // Token administrativo enviado pelo navegador
         const adminToken = req.headers["x-nexa-admin-token"];
 
-        if (!adminToken || adminToken !== NEXA_ADMIN_TOKEN) {
+        if (!adminToken) {
             return res.status(401).json({
-                error: "Não autorizado."
+                error: "Token administrativo não enviado."
+            });
+        }
+
+        if (adminToken !== NEXA_ADMIN_TOKEN) {
+            return res.status(401).json({
+                error: "Token administrativo inválido."
             });
         }
 
         try {
             const body = req.body;
 
-            if (!body || typeof body !== "object") {
+            // Verifica se recebeu um objeto
+            if (!body || typeof body !== "object" || Array.isArray(body)) {
                 return res.status(400).json({
                     error: "Dados inválidos."
                 });
             }
 
-            const response = await fetch(supabaseUrl, {
-                method: "PATCH",
-                headers: {
-                    "Content-Type": "application/json",
-                    apikey: SUPABASE_SECRET_KEY,
-                    Prefer: "return=representation"
-                },
-                body: JSON.stringify({
-                    data: body,
-                    updated_at: new Date().toISOString()
-                })
-            });
+            const response = await fetch(
+                supabaseUrl + "?id=eq.1",
+                {
+                    method: "PATCH",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "apikey": SUPABASE_SECRET_KEY,
+                        "Prefer": "return=representation"
+                    },
+                    body: JSON.stringify({
+                        data: body,
+                        updated_at: new Date().toISOString()
+                    })
+                }
+            );
+
+            const responseText = await response.text();
 
             if (!response.ok) {
-                const errorText = await response.text();
-
                 return res.status(response.status).json({
                     error: "Erro ao salvar dados no Supabase.",
-                    details: errorText
+                    details: responseText
                 });
             }
 
-            const rows = await response.json();
+            let rows = [];
+
+            try {
+                rows = responseText
+                    ? JSON.parse(responseText)
+                    : [];
+            } catch {
+                rows = [];
+            }
 
             return res.status(200).json({
                 success: true,
@@ -125,7 +173,7 @@ export default async function handler(req, res) {
     }
 
     // ==========================================
-    // Método não permitido
+    // MÉTODO NÃO PERMITIDO
     // ==========================================
 
     res.setHeader("Allow", ["GET", "PUT"]);
